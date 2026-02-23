@@ -1,0 +1,68 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "HITECH_FORMS SNAPSHOT MINI",
+  "type": "object",
+  "required": ["schema_version","repo","layout","python_tooling","test_commands","health_checks","notes_unknowns"],
+  "properties": {
+    "schema_version": { "type": "string" },
+    "repo": {
+      "type": "object",
+      "required": ["root","has_git","python_version_hint","venv_present","pyproject_present","requirements_files"],
+      "properties": {
+        "root": { "type": "string" },
+        "has_git": { "type": "boolean" },
+        "python_version_hint": { "type": "string" },
+        "venv_present": { "type": "boolean" },
+        "pyproject_present": { "type": "boolean" },
+        "requirements_files": { "type": "array", "items": { "type": "string" } }
+      }
+    },
+    "layout": {
+      "type": "object",
+      "required": ["dirs_present","key_dirs","caches_present"],
+      "properties": {
+        "dirs_present": { "type": "array", "items": { "type": "string" } },
+        "key_dirs": {
+          "type": "object",
+          "required": ["src","tests","tools","migrations","var"],
+          "properties": {
+            "src": { "type": "string" },
+            "tests": { "type": "string" },
+            "tools": { "type": "string" },
+            "migrations": { "type": "string" },
+            "var": { "type": "string" }
+          }
+        },
+        "caches_present": { "type": "array", "items": { "type": "string" } }
+      }
+    },
+    "python_tooling": {
+      "type": "object",
+      "required": ["pytest","ruff","mypy"],
+      "properties": {
+        "pytest": { "type": "string" },
+        "ruff": { "type": "string" },
+        "mypy": { "type": "string" }
+      }
+    },
+    "test_commands": {
+      "type": "object",
+      "required": ["preferred","alternates","state"],
+      "properties": {
+        "preferred": { "type": "string" },
+        "alternates": { "type": "array", "items": { "type": "string" } },
+        "state": { "type": "string" }
+      }
+    },
+    "health_checks": {
+      "type": "object",
+      "required": ["commands","state"],
+      "properties": {
+        "commands": { "type": "array", "items": { "type": "string" } },
+        "state": { "type": "string" }
+      }
+    },
+    "notes_unknowns": { "type": "array", "items": { "type": "string" } }
+  },
+  "additionalProperties": false
+}

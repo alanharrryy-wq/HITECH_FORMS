@@ -9,3 +9,32 @@ var/
 dist/
 build/
 *.egg-info/
+
+# --- HITECH_FORMS hygiene (generated/caches) ---
+*.py[cod]
+*.pyd
+.tox/
+.coverage
+coverage.xml
+htmlcov/
+.cache/
+pip-wheel-metadata/
+venv/
+ENV/
+.env.local
+
+# Global dev cache root (not inside repo, but safe to ignore anyway)
+_DEV_CACHE*/
+_CACHE*/
+
+# Local machine / workspace artifacts
+.env
+.env.*
+!.env.example
+.vscode/
+_codex_worktrees/
+_merge_logs/
+
+# Empty merge placeholders (local only)
+scripts/hitech-templates/patcher.mjs
+scripts/hitech-templates/patches.json

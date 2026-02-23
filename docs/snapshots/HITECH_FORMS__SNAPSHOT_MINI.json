@@ -1,0 +1,63 @@
+{
+  "health_checks": {
+    "commands": [
+      "python -m pytest -q"
+    ],
+    "state": "PRESENT"
+  },
+  "layout": {
+    "caches_present": [
+      ".mypy_cache",
+      ".pytest_cache",
+      ".ruff_cache"
+    ],
+    "dirs_present": [
+      ".mypy_cache",
+      ".pytest_cache",
+      ".ruff_cache",
+      ".venv",
+      ".vscode",
+      "_codex_worktrees",
+      "_merge_logs",
+      "docs",
+      "migrations",
+      "scripts",
+      "src",
+      "tests",
+      "tools",
+      "var"
+    ],
+    "key_dirs": {
+      "migrations": "PRESENT",
+      "src": "PRESENT",
+      "tests": "PRESENT",
+      "tools": "PRESENT",
+      "var": "PRESENT"
+    }
+  },
+  "notes_unknowns": [],
+  "python_tooling": {
+    "mypy": "PRESENT",
+    "pytest": "PRESENT",
+    "ruff": "PRESENT"
+  },
+  "repo": {
+    "has_git": true,
+    "pyproject_present": true,
+    "python_version_hint": "3.12.10",
+    "requirements_files": [
+      "requirements-dev.txt",
+      "requirements.txt"
+    ],
+    "root": "F:\\repos\\HITECH_FORMS",
+    "venv_present": true
+  },
+  "schema_version": "1.0.0",
+  "test_commands": {
+    "alternates": [
+      "pytest -q"
+    ],
+    "preferred": "python -m pytest -q",
+    "state": "PRESENT"
+  }
+}
