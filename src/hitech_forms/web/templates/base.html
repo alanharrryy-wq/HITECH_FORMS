@@ -1,0 +1,119 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{{ title or "HITECH_FORMS" }}</title>
+  <style>
+    :root {
+      --bg: #f4f1e8;
+      --panel: #fffdf8;
+      --ink: #22201a;
+      --accent: #0f5f4c;
+      --warn: #b12a1a;
+      --muted: #6d685d;
+      --border: #d7d0c3;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: "Segoe UI", "Helvetica Neue", sans-serif;
+      background: linear-gradient(155deg, #efe9dc 0%, #f7f4ec 65%, #ece7dc 100%);
+      color: var(--ink);
+    }
+    .shell {
+      max-width: 1100px;
+      margin: 0 auto;
+      padding: 24px;
+    }
+    .topbar {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 20px;
+    }
+    .brand {
+      font-size: 1.3rem;
+      letter-spacing: 0.08em;
+      font-weight: 700;
+      text-transform: uppercase;
+    }
+    .panel {
+      background: var(--panel);
+      border: 1px solid var(--border);
+      border-radius: 14px;
+      padding: 16px;
+      margin-bottom: 16px;
+    }
+    .row {
+      display: flex;
+      gap: 12px;
+      flex-wrap: wrap;
+    }
+    .row > * { flex: 1 1 220px; }
+    input, select, textarea, button {
+      width: 100%;
+      padding: 10px 12px;
+      border-radius: 10px;
+      border: 1px solid #c8c0b3;
+      background: #fff;
+      color: inherit;
+    }
+    textarea { min-height: 180px; font-family: Consolas, monospace; }
+    button, .btn {
+      background: var(--accent);
+      color: #fff;
+      border: none;
+      cursor: pointer;
+      text-decoration: none;
+      display: inline-block;
+      text-align: center;
+      width: auto;
+      padding: 10px 14px;
+    }
+    .btn.alt {
+      background: #bcb3a4;
+      color: #1f1c17;
+    }
+    .btn.warn, button.warn {
+      background: var(--warn);
+    }
+    .error {
+      color: var(--warn);
+      font-weight: 600;
+      margin-bottom: 10px;
+    }
+    .muted { color: var(--muted); }
+    table {
+      width: 100%;
+      border-collapse: collapse;
+    }
+    th, td {
+      text-align: left;
+      border-bottom: 1px solid var(--border);
+      padding: 10px 6px;
+      vertical-align: top;
+    }
+    code {
+      background: #efe8da;
+      padding: 2px 6px;
+      border-radius: 8px;
+    }
+    @media (max-width: 720px) {
+      .shell { padding: 14px; }
+      .topbar { flex-direction: column; align-items: flex-start; gap: 8px; }
+    }
+  </style>
+</head>
+<body>
+  <main class="shell">
+    <header class="topbar">
+      <div class="brand">HITECH_FORMS</div>
+      <nav>
+        <a class="btn alt" href="/admin/forms{% if token %}?token={{ token }}{% endif %}">Admin</a>
+      </nav>
+    </header>
+    {% block content %}{% endblock %}
+  </main>
+</body>
+</html>

@@ -1,0 +1,36 @@
+{% extends "base.html" %}
+{% block content %}
+<section class="panel">
+  <h1>{{ form.title }}</h1>
+  <p class="muted">Published form: <code>{{ form.slug }}</code></p>
+  {% if error %}<p class="error">{{ error }}</p>{% endif %}
+  <form method="post" action="/f/{{ form.slug }}/submit">
+    {% for field in form.fields %}
+    <label style="display:block; margin-bottom: 12px;">
+      {{ field.label }} {% if field.required %}*{% endif %}
+      {% if field.field_type == "textarea" %}
+      <textarea name="{{ field.key }}" {% if field.required %}required{% endif %}></textarea>
+      {% elif field.field_type == "number" %}
+      <input type="number" name="{{ field.key }}" {% if field.required %}required{% endif %}>
+      {% elif field.field_type == "email" %}
+      <input type="email" name="{{ field.key }}" {% if field.required %}required{% endif %}>
+      {% elif field.field_type == "date" %}
+      <input type="date" name="{{ field.key }}" {% if field.required %}required{% endif %}>
+      {% elif field.field_type == "checkbox" %}
+      <input type="checkbox" name="{{ field.key }}" value="true">
+      {% elif field.field_type == "select" %}
+      <select name="{{ field.key }}" {% if field.required %}required{% endif %}>
+        <option value="">-- choose --</option>
+        {% for opt in field.options %}
+        <option value="{{ opt }}">{{ opt }}</option>
+        {% endfor %}
+      </select>
+      {% else %}
+      <input type="text" name="{{ field.key }}" {% if field.required %}required{% endif %}>
+      {% endif %}
+    </label>
+    {% endfor %}
+    <button type="submit">Submit</button>
+  </form>
+</section>
+{% endblock %}
