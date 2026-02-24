@@ -1,0 +1,4 @@
+D_validation
+- Added deterministic unit, integration, and smoke tests.
+- Added migration replay + schema reflection coverage.
+- Added export determinism, auth enforcement, pagination, and reorder tests.

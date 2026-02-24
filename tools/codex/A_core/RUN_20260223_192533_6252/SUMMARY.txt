@@ -1,0 +1,4 @@
+A_core
+- Reworked platform settings validation + deterministic utilities.
+- Expanded SQLAlchemy models, repositories, session lifecycle, and migrations.
+- Added command/query services for forms, submissions, and exports.

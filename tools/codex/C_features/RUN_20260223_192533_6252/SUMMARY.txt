@@ -1,0 +1,4 @@
+C_features
+- Implemented admin and public API routes with token auth guard.
+- Implemented SSR admin/public templates for create/edit/publish/submit/review flows.
+- Added centralized error response mapping and CSV streaming endpoint.

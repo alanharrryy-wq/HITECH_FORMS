@@ -1,0 +1,4 @@
+B_tooling
+- Unified CLI commands (db upgrade, runserver, seed-demo, export-csv, quality-check).
+- Tightened pyproject lint/type/test configuration and coverage hooks.
+- Added editorconfig and dependency updates including python-multipart.

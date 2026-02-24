@@ -1,0 +1,36 @@
+HITECH_FORMS Industrial MVP Factory Sprint
+RUN_ID: 20260223_192533_6252
+ABSOLUTE_ROOT: F:\repos\HITECH_FORMS
+
+Worker Commit Groups
+- Block 1: 58b01f6 block1: implement deterministic core, schema, and service layer
+- Block 2: c6e4772 block2: deliver admin/public routes, SSR UX, and auth-guarded exports
+- Block 3: 7f63b0c block3: harden tooling, deterministic tests, and architecture docs
+
+Validation Sequence (Required Order)
+1. ruff check . -> PASS
+2. mypy src -> PASS
+3. pytest -q -> PASS (14 passed)
+4. migration upgrade test -> PASS (alembic upgrade head on temp DB)
+5. export determinism check -> PASS (test_export_is_deterministic_across_calls)
+6. auth enforcement test -> PASS (test_admin_auth_enforced)
+
+Delivered MVP Features
+- Create/Edit/Delete forms
+- Dynamic fields (text, textarea, number, email, select, checkbox, date)
+- Deterministic field reordering
+- Publish to /f/<slug>
+- Submission intake and admin review
+- Streaming CSV export
+- Token-based admin auth + rate-limit hook
+- Deterministic test suite + migration replay checks
+
+Docs Delivered
+- docs/KERNEL_CONTEXT.md
+- docs/ARCHITECTURE.md
+- docs/API.md
+- docs/SECURITY.md
+- README quickstart/commands/workflow/folder map
+
+Final State
+- Git working tree cleaned via grouped commits.
