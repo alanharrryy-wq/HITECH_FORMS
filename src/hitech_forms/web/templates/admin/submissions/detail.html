@@ -1,0 +1,26 @@
+{% extends "base.html" %}
+{% block content %}
+<section class="panel">
+  <h1>Submission #{{ submission.id }}</h1>
+  <p class="muted">Form #{{ form.id }} | seq {{ submission.submission_seq }} | created_at {{ submission.created_at }}</p>
+  <a class="btn alt" href="/admin/forms/{{ form.id }}/submissions?token={{ token }}">Back</a>
+</section>
+<section class="panel">
+  <table>
+    <thead>
+      <tr>
+        <th>Field</th>
+        <th>Value</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for key, value in submission.answers.items() %}
+      <tr>
+        <td><code>{{ key }}</code></td>
+        <td>{{ value }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</section>
+{% endblock %}

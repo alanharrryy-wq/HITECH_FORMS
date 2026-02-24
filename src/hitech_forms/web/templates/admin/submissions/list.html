@@ -1,0 +1,47 @@
+{% extends "base.html" %}
+{% block content %}
+<section class="panel">
+  <h1>Submissions</h1>
+  <p class="muted">Form #{{ form.id }} - {{ form.title }}</p>
+  <div class="row">
+    <a class="btn alt" href="/admin/forms/{{ form.id }}/fields?token={{ token }}">Back to editor</a>
+    <a class="btn" href="/api/admin/forms/{{ form.id }}/export.csv?token={{ token }}">Export CSV</a>
+  </div>
+  {% if submissions %}
+  <table>
+    <thead>
+      <tr>
+        <th>Seq</th>
+        <th>ID</th>
+        <th>Created</th>
+        <th></th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for row in submissions %}
+      <tr>
+        <td>{{ row.submission_seq }}</td>
+        <td>{{ row.id }}</td>
+        <td>{{ row.created_at }}</td>
+        <td><a class="btn alt" href="/admin/forms/{{ form.id }}/submissions/{{ row.id }}?token={{ token }}">View</a></td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% else %}
+  <p class="muted">No submissions yet.</p>
+  {% endif %}
+</section>
+<section class="panel">
+  <div class="row">
+    <div>
+      {% if page > 1 %}
+      <a class="btn alt" href="/admin/forms/{{ form.id }}/submissions?page={{ page - 1 }}&token={{ token }}">Previous</a>
+      {% endif %}
+      {% if has_next %}
+      <a class="btn alt" href="/admin/forms/{{ form.id }}/submissions?page={{ page + 1 }}&token={{ token }}">Next</a>
+      {% endif %}
+    </div>
+  </div>
+</section>
+{% endblock %}

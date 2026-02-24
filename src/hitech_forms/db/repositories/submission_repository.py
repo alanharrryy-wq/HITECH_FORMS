@@ -2,9 +2,10 @@ from __future__ import annotations
 
 from collections.abc import Iterator
 
-from sqlalchemy import func, select
+from sqlalchemy import func, insert, select
 from sqlalchemy.orm import Session, selectinload
 
+from hitech_forms.contracts import SUBMISSION_ORDER
 from hitech_forms.db.models import Answer, Submission
 from hitech_forms.platform.errors import not_found
 
@@ -21,13 +22,25 @@ class SubmissionRepository:
         answers: dict[str, str],
         now_epoch: int,
     ) -> Submission:
-        submission = Submission(
-            form_id=form_id,
-            form_version_id=form_version_id,
-            created_at=now_epoch,
+        next_submission_seq = (
+            select(func.coalesce(func.max(Submission.submission_seq), 0) + 1)
+            .where(Submission.form_id == form_id)
+            .scalar_subquery()
         )
-        self._session.add(submission)
-        self._session.flush()
+        insert_stmt = (
+            insert(Submission)
+            .values(
+                form_id=form_id,
+                form_version_id=form_version_id,
+                submission_seq=next_submission_seq,
+                created_at=now_epoch,
+            )
+            .returning(Submission.id)
+        )
+        submission_id = int(self._session.execute(insert_stmt).scalar_one())
+        submission = self._session.get(Submission, submission_id)
+        if submission is None:
+            raise not_found("submission not found")
 
         answer_rows = [
             Answer(
@@ -49,7 +62,10 @@ class SubmissionRepository:
         stmt = (
             select(Submission)
             .where(Submission.form_id == form_id)
-            .order_by(Submission.created_at.asc(), Submission.id.asc())
+            .order_by(
+                getattr(Submission, SUBMISSION_ORDER[0]).asc(),
+                getattr(Submission, SUBMISSION_ORDER[1]).asc(),
+            )
             .offset(offset)
             .limit(limit)
         )
@@ -71,7 +87,10 @@ class SubmissionRepository:
         stmt = (
             select(Submission)
             .where(Submission.form_id == form_id)
-            .order_by(Submission.created_at.asc(), Submission.id.asc())
+            .order_by(
+                getattr(Submission, SUBMISSION_ORDER[0]).asc(),
+                getattr(Submission, SUBMISSION_ORDER[1]).asc(),
+            )
             .options(selectinload(Submission.answers))
         )
         yield from self._session.execute(stmt).scalars()

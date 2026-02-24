@@ -5,9 +5,15 @@ import re
 from dataclasses import asdict
 from datetime import date
 
+from hitech_forms.contracts import (
+    ANSWER_ORDER,
+    FIELD_ORDER,
+    FormRepositoryPort,
+    SubmissionDetailDTO,
+    SubmissionRepositoryPort,
+    SubmissionSummaryDTO,
+)
 from hitech_forms.db.models import Field
-from hitech_forms.db.repositories import FormRepository, SubmissionRepository
-from hitech_forms.domain import SubmissionDetailDTO, SubmissionSummaryDTO
 from hitech_forms.platform.determinism import utc_now_epoch
 from hitech_forms.platform.errors import bad_request
 from hitech_forms.platform.slug import slugify
@@ -16,7 +22,7 @@ _EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 
 
 class SubmissionService:
-    def __init__(self, form_repo: FormRepository, submission_repo: SubmissionRepository):
+    def __init__(self, form_repo: FormRepositoryPort, submission_repo: SubmissionRepositoryPort):
         self._form_repo = form_repo
         self._submission_repo = submission_repo
 
@@ -25,6 +31,11 @@ class SubmissionService:
         if form.status != "published":
             raise bad_request("form is not published")
         version = self._form_repo.get_active_version(form)
+        if version.status != "published":
+            raise bad_request(
+                "active form version is not published",
+                details={"form_id": form.id, "form_version_id": version.id},
+            )
         fields = self._form_repo.get_fields_for_version(version.id)
         normalized_answers = self._validate_submission(fields, values)
         submission = self._submission_repo.create_submission(
@@ -38,6 +49,7 @@ class SubmissionService:
                 id=submission.id,
                 form_id=submission.form_id,
                 form_version_id=submission.form_version_id,
+                submission_seq=submission.submission_seq,
                 created_at=submission.created_at,
             )
         )
@@ -57,6 +69,7 @@ class SubmissionService:
                     id=row.id,
                     form_id=row.form_id,
                     form_version_id=row.form_version_id,
+                    submission_seq=row.submission_seq,
                     created_at=row.created_at,
                 )
             )
@@ -72,12 +85,16 @@ class SubmissionService:
 
     def query_submission_detail(self, *, form_id: int, submission_id: int) -> dict:
         row = self._submission_repo.get_submission(form_id=form_id, submission_id=submission_id)
-        answers = {item.field_key: item.value_text for item in sorted(row.answers, key=lambda x: x.field_key)}
+        answers = {
+            item.field_key: item.value_text
+            for item in sorted(row.answers, key=lambda x: getattr(x, ANSWER_ORDER[0]))
+        }
         return asdict(
             SubmissionDetailDTO(
                 id=row.id,
                 form_id=row.form_id,
                 form_version_id=row.form_version_id,
+                submission_seq=row.submission_seq,
                 created_at=row.created_at,
                 answers=answers,
             )
@@ -85,7 +102,7 @@ class SubmissionService:
 
     def _validate_submission(self, fields: list[Field], values: dict[str, str]) -> dict[str, str]:
         normalized: dict[str, str] = {}
-        for field in sorted(fields, key=lambda x: (x.position, x.id)):
+        for field in sorted(fields, key=lambda x: (getattr(x, FIELD_ORDER[0]), getattr(x, FIELD_ORDER[1]))):
             incoming = values.get(field.field_key, "")
             normalized_value = self._normalize_by_type(field, incoming)
             if field.required and not normalized_value:

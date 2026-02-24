@@ -3,9 +3,14 @@ from __future__ import annotations
 import json
 from dataclasses import asdict
 
+from hitech_forms.contracts import (
+    FIELD_ORDER,
+    FieldDTO,
+    FormDetailDTO,
+    FormRepositoryPort,
+    FormSummaryDTO,
+)
 from hitech_forms.db.models import Field, Form
-from hitech_forms.db.repositories import FormRepository
-from hitech_forms.domain import FieldDTO, FormDetailDTO, FormSummaryDTO
 from hitech_forms.platform.determinism import stable_sorted, utc_now_epoch
 from hitech_forms.platform.errors import bad_request, conflict, not_found
 from hitech_forms.platform.slug import slugify, stable_slug
@@ -14,7 +19,7 @@ ALLOWED_FIELD_TYPES = {"text", "textarea", "number", "email", "select", "checkbo
 
 
 class FormService:
-    def __init__(self, form_repo: FormRepository):
+    def __init__(self, form_repo: FormRepositoryPort):
         self._form_repo = form_repo
 
     def query_list_forms(self, *, page: int, page_size: int) -> dict:
@@ -69,6 +74,11 @@ class FormService:
     def command_replace_fields(self, *, form_id: int, fields: list[dict]) -> dict:
         form = self._form_repo.get_form(form_id)
         active_version = self._form_repo.get_active_version(form)
+        if active_version.status == "published":
+            raise conflict(
+                "published form version is immutable",
+                details={"form_id": form_id, "form_version_id": active_version.id},
+            )
         normalized = self._normalize_fields(fields)
         now_epoch = utc_now_epoch()
         self._form_repo.replace_fields(
@@ -106,7 +116,13 @@ class FormService:
 
     def _to_form_detail(self, form: Form) -> FormDetailDTO:
         active = self._form_repo.get_active_version(form)
-        fields = [self._to_field_dto(row) for row in stable_sorted(active.fields, key=lambda x: (x.position, x.id))]
+        fields = [
+            self._to_field_dto(row)
+            for row in stable_sorted(
+                active.fields,
+                key=lambda x: (getattr(x, FIELD_ORDER[0]), getattr(x, FIELD_ORDER[1])),
+            )
+        ]
         return FormDetailDTO(
             id=form.id,
             title=form.title,

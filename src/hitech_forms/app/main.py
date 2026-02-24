@@ -16,11 +16,13 @@ app.include_router(web_router)
 
 @app.exception_handler(AppError)
 async def app_error_handler(_request: Request, exc: AppError):
-    payload = {"error": {"code": exc.code, "message": exc.message}}
+    payload = {"error": {"code": exc.code, "message": exc.message, "details": exc.details}}
     return canonical_json_response(payload, status_code=exc.status_code)
 
 
 @app.exception_handler(RequestValidationError)
-async def validation_error_handler(_request: Request, _exc: RequestValidationError):
-    payload = {"error": {"code": "validation_error", "message": "invalid request"}}
+async def validation_error_handler(_request: Request, exc: RequestValidationError):
+    payload = {
+        "error": {"code": "validation_error", "message": "invalid request", "details": {"errors": exc.errors()}}
+    }
     return canonical_json_response(payload, status_code=422)

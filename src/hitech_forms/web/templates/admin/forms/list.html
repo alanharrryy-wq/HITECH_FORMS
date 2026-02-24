@@ -1,0 +1,56 @@
+{% extends "base.html" %}
+{% block content %}
+<section class="panel">
+  <div class="row" style="align-items: center;">
+    <div>
+      <h1>Forms</h1>
+      <p class="muted">Deterministic ordering by created time then id.</p>
+    </div>
+    <div style="text-align: right;">
+      <a class="btn" href="/admin/forms/new?token={{ token }}">Create form</a>
+    </div>
+  </div>
+  {% if forms %}
+  <table>
+    <thead>
+      <tr>
+        <th>ID</th>
+        <th>Title</th>
+        <th>Slug</th>
+        <th>Status</th>
+        <th>Actions</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for form in forms %}
+      <tr>
+        <td>{{ form.id }}</td>
+        <td>{{ form.title }}</td>
+        <td><code>{{ form.slug }}</code></td>
+        <td>{{ form.status }}</td>
+        <td>
+          <a class="btn alt" href="/admin/forms/{{ form.id }}/fields?token={{ token }}">Edit</a>
+          <a class="btn alt" href="/admin/forms/{{ form.id }}/submissions?token={{ token }}">Submissions</a>
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% else %}
+  <p class="muted">No forms yet.</p>
+  {% endif %}
+</section>
+<section class="panel">
+  <div class="row">
+    <div>
+      {% if page > 1 %}
+      <a class="btn alt" href="/admin/forms?page={{ page - 1 }}&page_size={{ page_size }}&token={{ token }}">Previous</a>
+      {% endif %}
+      {% if has_next %}
+      <a class="btn alt" href="/admin/forms?page={{ page + 1 }}&page_size={{ page_size }}&token={{ token }}">Next</a>
+      {% endif %}
+    </div>
+    <div class="muted" style="text-align: right;">Total {{ total }} forms</div>
+  </div>
+</section>
+{% endblock %}

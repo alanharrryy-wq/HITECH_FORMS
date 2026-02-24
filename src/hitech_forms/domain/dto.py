@@ -1,53 +1,17 @@
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from hitech_forms.contracts.dto import (
+    FieldDTO,
+    FormDetailDTO,
+    FormSummaryDTO,
+    SubmissionDetailDTO,
+    SubmissionSummaryDTO,
+)
 
-
-@dataclass(frozen=True)
-class FieldDTO:
-    id: int
-    key: str
-    label: str
-    field_type: str
-    required: bool
-    position: int
-    options: list[str] = field(default_factory=list)
-
-
-@dataclass(frozen=True)
-class FormSummaryDTO:
-    id: int
-    title: str
-    slug: str
-    status: str
-    created_at: int
-    updated_at: int
-
-
-@dataclass(frozen=True)
-class FormDetailDTO:
-    id: int
-    title: str
-    slug: str
-    status: str
-    active_version_id: int
-    fields: list[FieldDTO]
-    created_at: int
-    updated_at: int
-
-
-@dataclass(frozen=True)
-class SubmissionSummaryDTO:
-    id: int
-    form_id: int
-    form_version_id: int
-    created_at: int
-
-
-@dataclass(frozen=True)
-class SubmissionDetailDTO:
-    id: int
-    form_id: int
-    form_version_id: int
-    created_at: int
-    answers: dict[str, str]
+__all__ = [
+    "FieldDTO",
+    "FormSummaryDTO",
+    "FormDetailDTO",
+    "SubmissionSummaryDTO",
+    "SubmissionDetailDTO",
+]

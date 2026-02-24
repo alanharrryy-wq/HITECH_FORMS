@@ -6,6 +6,7 @@ from typing import Any, cast
 from sqlalchemy import Select, func, select
 from sqlalchemy.orm import Session, joinedload
 
+from hitech_forms.contracts import FIELD_ORDER, FORM_LIST_ORDER
 from hitech_forms.db.models import Field, Form, FormVersion
 from hitech_forms.platform.errors import not_found
 
@@ -22,7 +23,7 @@ class FormRepository:
         total = self._session.execute(select(func.count(Form.id))).scalar_one()
         stmt = (
             select(Form)
-            .order_by(Form.created_at.asc(), Form.id.asc())
+            .order_by(getattr(Form, FORM_LIST_ORDER[0]).asc(), getattr(Form, FORM_LIST_ORDER[1]).asc())
             .offset(offset)
             .limit(limit)
         )
@@ -139,7 +140,7 @@ class FormRepository:
         stmt = (
             select(Field)
             .where(Field.form_version_id == form_version_id)
-            .order_by(Field.position.asc(), Field.id.asc())
+            .order_by(getattr(Field, FIELD_ORDER[0]).asc(), getattr(Field, FIELD_ORDER[1]).asc())
         )
         return list(self._session.execute(stmt).scalars().all())
 

@@ -4,6 +4,7 @@ from fastapi import Depends, Header, Query, Request
 from sqlalchemy.orm import Session
 
 from hitech_forms.app.security.rate_limit import InMemoryRateLimiter
+from hitech_forms.contracts import ExportServicePort, FormServicePort, SubmissionServicePort
 from hitech_forms.db import get_session
 from hitech_forms.db.repositories import FormRepository, SubmissionRepository
 from hitech_forms.platform.errors import unauthorized
@@ -43,13 +44,13 @@ async def admin_guard(
     _rate_limiter.check(key=identity, scope=scope, limit_per_minute=settings.rate_limit_per_minute)
 
 
-def get_form_service(session: Session = Depends(get_session)) -> FormService:
+def get_form_service(session: Session = Depends(get_session)) -> FormServicePort:
     return FormService(FormRepository(session))
 
 
-def get_submission_service(session: Session = Depends(get_session)) -> SubmissionService:
+def get_submission_service(session: Session = Depends(get_session)) -> SubmissionServicePort:
     return SubmissionService(FormRepository(session), SubmissionRepository(session))
 
 
-def get_export_service(session: Session = Depends(get_session)) -> ExportService:
+def get_export_service(session: Session = Depends(get_session)) -> ExportServicePort:
     return ExportService(FormRepository(session), SubmissionRepository(session))
