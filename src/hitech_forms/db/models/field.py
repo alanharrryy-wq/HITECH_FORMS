@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from sqlalchemy import ForeignKey, Integer, String, Text
+from sqlalchemy import ForeignKey, Index, Integer, String, Text, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from hitech_forms.db.models.base import Base
@@ -8,9 +8,16 @@ from hitech_forms.db.models.base import Base
 
 class Field(Base):
     __tablename__ = "fields"
+    __table_args__ = (
+        UniqueConstraint("form_version_id", "field_key", name="uq_field_key_per_version"),
+        Index("ix_fields_form_version_id", "form_version_id"),
+        Index("ix_fields_position", "position"),
+    )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
-    form_version_id: Mapped[int] = mapped_column(ForeignKey("form_versions.id"), nullable=False)
+    form_version_id: Mapped[int] = mapped_column(
+        ForeignKey("form_versions.id", ondelete="CASCADE"), nullable=False
+    )
     field_key: Mapped[str] = mapped_column(String(120), nullable=False)
     label: Mapped[str] = mapped_column(String(200), nullable=False)
     type: Mapped[str] = mapped_column(String(30), nullable=False, default="text")
