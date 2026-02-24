@@ -2,6 +2,7 @@ import json
 import sys
 from pathlib import Path
 
+
 def find_repo_root(start: Path) -> Path:
     current = start.resolve()
     while True:

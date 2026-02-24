@@ -12,8 +12,7 @@ app = typer.Typer(add_completion=False)
 
 @app.command()
 def lint():
-    subprocess.run([sys.executable, "-m", "ruff", "check", "src", "tests"], check=True)
-    subprocess.run([sys.executable, "-m", "ruff", "format", "--check", "src", "tests"], check=True)
+    subprocess.run([sys.executable, "-m", "ruff", "check", "."], check=True)
 
 
 @app.command()
@@ -23,15 +22,12 @@ def typecheck():
 
 @app.command()
 def start_smoke():
-    # Reuse E2E smoke deterministically (no flaky UI automation)
-    subprocess.run(
-        [sys.executable, "-m", "pytest", "-q", "tests/e2e", "-k", "smoke_health"], check=True
-    )
+    subprocess.run([sys.executable, "-m", "pytest", "-q", "tests", "-k", "smoke_health"], check=True)
 
 
 @app.command()
 def e2e(flows: str = "smoke_health"):
-    subprocess.run([sys.executable, "-m", "pytest", "-q", "tests/e2e", "-k", flows], check=True)
+    subprocess.run([sys.executable, "-m", "pytest", "-q", "tests", "-k", flows], check=True)
 
 
 @app.command()

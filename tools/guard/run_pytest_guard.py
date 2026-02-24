@@ -1,6 +1,7 @@
+import subprocess
 import sys
 from pathlib import Path
-import subprocess
+
 
 def find_repo_root(start: Path) -> Path | None:
     p = start.resolve()

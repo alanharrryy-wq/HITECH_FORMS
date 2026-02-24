@@ -65,7 +65,7 @@ def main() -> None:
 
     tracked = [p for p in run_git(root, "ls-files").splitlines() if p.strip()]
     untracked = [p for p in run_git(root, "ls-files", "--others", "--exclude-standard").splitlines() if p.strip()]
-    status_lines = [l for l in run_git(root, "status", "--short").splitlines() if l.strip()]
+    status_lines = [line for line in run_git(root, "status", "--short").splitlines() if line.strip()]
 
     tracked_files = []
     tracked_total_size = 0
