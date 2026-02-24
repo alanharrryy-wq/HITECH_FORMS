@@ -34,6 +34,8 @@ _CACHE*/
 .vscode/
 _codex_worktrees/
 _merge_logs/
+tools/codex/**/RUN_*.zip
+tools/codex/**/RUN_*/
 
 # Empty merge placeholders (local only)
 scripts/hitech-templates/patcher.mjs

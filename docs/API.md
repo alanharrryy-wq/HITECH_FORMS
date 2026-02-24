@@ -37,6 +37,7 @@ Allowed field types:
 
 - `GET /api/admin/forms/{form_id}/submissions?page=<int>&page_size=<int>`
 - `GET /api/admin/forms/{form_id}/submissions/{submission_id}`
+- Submission payloads include `submission_seq` (monotonic sequence per form).
 
 ## Exports
 
@@ -49,7 +50,8 @@ Allowed field types:
 {
   "error": {
     "code": "string",
-    "message": "string"
+    "message": "string",
+    "details": {}
   }
 }
 ```

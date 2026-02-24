@@ -18,15 +18,20 @@
    - submission validation
    - CSV streaming orchestration
 4. `api` and `web`
-   - API endpoints and SSR pages
+   - API endpoints and SSR pages, split into domain-owned router factories
    - admin token enforcement via dependency injection
    - centralized error mapping from `AppError`
+5. `contracts`
+   - DTO single source (`contracts.dto`)
+   - service/repository protocol ports (`contracts.interfaces`)
+   - deterministic ordering/export invariants (`contracts.invariants`)
 
 ## Dependency Injection
 
 - request-scoped dependencies create repositories/services from DB session.
 - admin guard enforces token + rate-limit hook.
 - export service is injected independently from form/submission services.
+- API/Web layers type against contract ports (`FormServicePort`, `SubmissionServicePort`, `ExportServicePort`).
 
 ## Database Design
 
@@ -41,7 +46,7 @@ Indexes:
 - `forms.slug`, `forms.created_at`
 - `form_versions.form_id`, `form_versions.created_at`
 - `fields.form_version_id`, `fields.position`
-- `submissions.form_id`, `submissions.created_at`
+- `submissions.form_id`, `submissions.created_at`, `submissions(form_id,submission_seq)`
 - `answers.submission_id`, `answers.field_key`
 
 ## Command/Query Split

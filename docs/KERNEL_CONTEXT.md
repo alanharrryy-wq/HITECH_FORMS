@@ -18,15 +18,18 @@ HITECH_FORMS is an MVP kernel for deterministic form lifecycle management:
 
 ## Core Boundaries
 
-- API/Web layers call service layer only.
+- API/Web layers consume contract interfaces and call service layer only.
 - Services call repositories only.
 - Repositories own ORM access and query ordering.
 - ORM models are not returned by API/web.
+- Contracts are single-source for DTOs, ports, and ordering invariants.
 
 ## Deterministic Data Rules
 
 - Stable slug normalization and collision suffixing.
 - Stable ordering in list endpoints: `created_at`, then `id`.
 - Stable field ordering: `position`, then `id`.
+- Stable submission ordering: `created_at`, then `id`.
+- Per-form submission sequence is monotonic (`submission_seq` starts at 1).
 - Canonical JSON: sorted keys and compact separators.
 - CSV export includes headers and deterministic column order.
