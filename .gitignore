@@ -38,3 +38,6 @@ _merge_logs/
 # Empty merge placeholders (local only)
 scripts/hitech-templates/patcher.mjs
 scripts/hitech-templates/patches.json
+
+# Windows Explorer metadata
+desktop.ini

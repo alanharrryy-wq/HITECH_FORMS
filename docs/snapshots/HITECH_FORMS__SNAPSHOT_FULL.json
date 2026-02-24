@@ -1,0 +1,321 @@
+{
+  "files_tracked": [
+    {
+      "path": ".env.example",
+      "sha256": "69decaddfe746420c5f6de8a7398c3dcd285b97f8ef6ef2f8e1b31a21ebbc952",
+      "size_bytes": 101
+    },
+    {
+      "path": ".gitignore",
+      "sha256": "4336dfcbd7f66d747f08bf82e0aafb77fb3cdcd99e78a0f142761d56cfce17e9",
+      "size_bytes": 595
+    },
+    {
+      "path": "README.md",
+      "sha256": "d073c547181cb490036d9b2331389f137822cf2d5136a421b3c58bc649a70154",
+      "size_bytes": 250
+    },
+    {
+      "path": "docs/snapshots/HITECH_FORMS__SNAPSHOT_MINI.json",
+      "sha256": "cbc8af8ac80153674273426a0408caa288598222cff67336e77b05e9d8292cb4",
+      "size_bytes": 1260
+    },
+    {
+      "path": "docs/snapshots/HITECH_FORMS__SNAPSHOT_MINI.schema.json",
+      "sha256": "72d340e1daba51781e3f77c6d71aae177b2073ee291b56c9ffc1bacfa2e7bc79",
+      "size_bytes": 2359
+    },
+    {
+      "path": "init_wave1.py",
+      "sha256": "7eb70257593da06f682a3ddda54a9d260d4fc514f645237f5ca74b08f8da61a6",
+      "size_bytes": 2
+    },
+    {
+      "path": "migrations/alembic.ini",
+      "sha256": "d6e45bf54942b2215876d354599037287e1ebef0e56da411c61977637ab3770b",
+      "size_bytes": 555
+    },
+    {
+      "path": "migrations/env.py",
+      "sha256": "e51f8927d6e7346cef6aa6f43d69bb06dc3df0dc2ac85579076f7f921aeffc21",
+      "size_bytes": 1344
+    },
+    {
+      "path": "migrations/script.py.mako",
+      "sha256": "55c748d6dec9b6eac87eb5b2b706e7d3c7615d7ce54479ee8ccf93a40abfd5e6",
+      "size_bytes": 35
+    },
+    {
+      "path": "migrations/versions/0001_initial.py",
+      "sha256": "75703d468bf47ed09176f9f561dd65bd68defd1e05e94116a14e57b910dd2d90",
+      "size_bytes": 2408
+    },
+    {
+      "path": "pyproject.toml",
+      "sha256": "8ede03cfb8b13a63ca4be0ad45a56951826dc0377e6cd5d186819cc70d0715e2",
+      "size_bytes": 679
+    },
+    {
+      "path": "requirements-dev.txt",
+      "sha256": "a02aa333206e834a40aed54880ddf52e6bcd5c8feecf5bf21df3e0654976bda5",
+      "size_bytes": 58
+    },
+    {
+      "path": "requirements.txt",
+      "sha256": "514377d960d83deeb810b5edeb36dff1834597ae8bf6260659f2cb79d4594c61",
+      "size_bytes": 102
+    },
+    {
+      "path": "scripts/snapshot_forms.ps1",
+      "sha256": "23a41bad06c8715b9004c92dd214e09d6b4d7042b48624752f19b26b6ccc14da",
+      "size_bytes": 447
+    },
+    {
+      "path": "scripts/snapshot_forms_validate.ps1",
+      "sha256": "3e2c964d0db00a3111c7450af5fb99d2bc77f86abc3abcbf3e4d6571106fb8a6",
+      "size_bytes": 468
+    },
+    {
+      "path": "src/hitech_forms/__init__.py",
+      "sha256": "127a5f97f45a9e1402447fe8665792502c0c87f880e7737b1374e4a4796e17db",
+      "size_bytes": 50
+    },
+    {
+      "path": "src/hitech_forms/api/__init__.py",
+      "sha256": "8fa67c758a161ceb8b529dbaa2bcf1c33ede7af02c75b813f8343cd69e7d254c",
+      "size_bytes": 58
+    },
+    {
+      "path": "src/hitech_forms/api/router.py",
+      "sha256": "b36b1035676d55445d03617a5d005c5516b65da30678c2a47407d9a3605467df",
+      "size_bytes": 351
+    },
+    {
+      "path": "src/hitech_forms/app/lifespan.py",
+      "sha256": "b70c057c033ce05b3ef94a40bbdd1942ebdd1f4ed2bd72a733e260223561316c",
+      "size_bytes": 228
+    },
+    {
+      "path": "src/hitech_forms/app/main.py",
+      "sha256": "4d297bee53fb3d73c9d654a78b53e927a8a20fd908cc055d6991d4065e3224a9",
+      "size_bytes": 335
+    },
+    {
+      "path": "src/hitech_forms/db/__init__.py",
+      "sha256": "cbeba8865228568deff7a0c5fe1fba562647ff024d088860cb013a0904fbe655",
+      "size_bytes": 181
+    },
+    {
+      "path": "src/hitech_forms/db/engine.py",
+      "sha256": "72055ee0d380badd8f3031bca1dca255d33db4a98b0943ee8aceff9204ffc522",
+      "size_bytes": 439
+    },
+    {
+      "path": "src/hitech_forms/db/models/__init__.py",
+      "sha256": "d15c774c2577973e5016fc2b1981770fd5a7f82c4410d33f32ba606b048926ef",
+      "size_bytes": 205
+    },
+    {
+      "path": "src/hitech_forms/db/models/base.py",
+      "sha256": "6cc9a00576568ed0f9327689400254c794c7ae39f8edcc6464e125d3e5a060e5",
+      "size_bytes": 112
+    },
+    {
+      "path": "src/hitech_forms/db/models/field.py",
+      "sha256": "0808d94be268cbf9edae8fb03dbf4ed350f2a065519ff2ab1e4230db5a6cf504",
+      "size_bytes": 1047
+    },
+    {
+      "path": "src/hitech_forms/db/models/form.py",
+      "sha256": "bdfd9636c5759260e9f2dc892aa9e3cb4f464c5cd53e1656379958195cc026e6",
+      "size_bytes": 811
+    },
+    {
+      "path": "src/hitech_forms/db/models/form_version.py",
+      "sha256": "9ed4f73884d29398d7f647935c061d7f03e78457728ffa00ddd93e7d986eb0cc",
+      "size_bytes": 906
+    },
+    {
+      "path": "src/hitech_forms/db/session.py",
+      "sha256": "e2c5c6806556ece7a40c6f32c237b31d60eb05fa770f7eb5a7a16436d2474797",
+      "size_bytes": 504
+    },
+    {
+      "path": "src/hitech_forms/ops/ci.py",
+      "sha256": "b11a7980aea3c3f0809663c0220b0593ca375c30670f99e2457ca68bd057122a",
+      "size_bytes": 1066
+    },
+    {
+      "path": "src/hitech_forms/ops/cli.py",
+      "sha256": "2479db1b4c349afc637aed5714fdf00be448737a81fb63e3c26c2fa321110920",
+      "size_bytes": 931
+    },
+    {
+      "path": "src/hitech_forms/platform/__init__.py",
+      "sha256": "f08a875a463d9c45eb3177c415191cc2f33bbf319ed3a8c69bf77dd6cc07a0a9",
+      "size_bytes": 421
+    },
+    {
+      "path": "src/hitech_forms/platform/determinism.py",
+      "sha256": "b5bee2ac64ee4a6168dcd148f03ea32a4f84b28f01a1f7117b63a2b99c01fb88",
+      "size_bytes": 460
+    },
+    {
+      "path": "src/hitech_forms/platform/feature_flags.py",
+      "sha256": "4a0b9ddaee577bf423f83b7d032d2686620dda3b1c580d6c956e241f68b2a0ac",
+      "size_bytes": 531
+    },
+    {
+      "path": "src/hitech_forms/platform/settings.py",
+      "sha256": "cb471d5b5a55b72c900a9ed517c9e954b0771bd8b44db743a2f64ee6b8e47857",
+      "size_bytes": 490
+    },
+    {
+      "path": "src/hitech_forms/platform/slug.py",
+      "sha256": "3e54b0401bd2cda99383efc9f9fd27ae61f941798e496cc49e6a822fe707e6fd",
+      "size_bytes": 243
+    },
+    {
+      "path": "src/hitech_forms/web/__init__.py",
+      "sha256": "6a54da20f4a40ea7475ca8adddf487ff2ec2cbe726603d3e0afdcf29b2f9df91",
+      "size_bytes": 58
+    },
+    {
+      "path": "src/hitech_forms/web/router.py",
+      "sha256": "f70462cc45fde3797e05932f9723287e8a92fb031caac849ea36e62b1912883b",
+      "size_bytes": 321
+    },
+    {
+      "path": "tests/e2e/test_smoke_health.py",
+      "sha256": "344cbe18790e13e7ba0fae617921a612f19b97fceb6a350f4dec7274cb4ae02b",
+      "size_bytes": 558
+    },
+    {
+      "path": "tools/bootstrap.ps1",
+      "sha256": "8bcfe6adcbc5c9b576ef6236dd44c3217bd00cafa7bca39141c64a2768c9cd87",
+      "size_bytes": 1952
+    },
+    {
+      "path": "tools/guard/run_pytest_guard.py",
+      "sha256": "f297b29c1000278c83993ce15f9c7c7395c23a2de340ff96d01d75ce01d7235a",
+      "size_bytes": 1571
+    },
+    {
+      "path": "tools/init_wave1.py",
+      "sha256": "57867231878b9bb22855981fa64c6e6dc543a6673439505c87bdaf6f35057c2e",
+      "size_bytes": 20060
+    },
+    {
+      "path": "tools/snapshot/forms_snapshot.py",
+      "sha256": "0965e9625903719850add18e316b92b8ddff563341028f6964f69abbafc71e9b",
+      "size_bytes": 3209
+    },
+    {
+      "path": "tools/snapshot/validate_snapshot.py",
+      "sha256": "87be3f23d2d3d1fd771320ffddaf6d9f741f1559200bdf6854b3410b39d1beab",
+      "size_bytes": 1557
+    }
+  ],
+  "generated_at_utc": "2026-02-24T00:19:16+00:00",
+  "git_status": {
+    "is_clean": false,
+    "status_lines": [
+      "?? desktop.ini",
+      "?? scripts/snapshot_forms_full.ps1",
+      "?? tools/snapshot/forms_snapshot_full.py"
+    ],
+    "tracked_files_count": 43,
+    "tracked_total_size_bytes": 49318,
+    "untracked_non_ignored": [
+      "desktop.ini",
+      "scripts/snapshot_forms_full.ps1",
+      "tools/snapshot/forms_snapshot_full.py"
+    ]
+  },
+  "health_checks": {
+    "alternate_test_commands": [
+      "pytest -q"
+    ],
+    "preferred_test_command": "python -m pytest -q"
+  },
+  "layout": {
+    "key_dirs": {
+      "docs": "PRESENT",
+      "migrations": "PRESENT",
+      "scripts": "PRESENT",
+      "src": "PRESENT",
+      "tests": "PRESENT",
+      "tools": "PRESENT",
+      "var": "PRESENT"
+    },
+    "top_level_dirs": [
+      ".mypy_cache",
+      ".pytest_cache",
+      ".ruff_cache",
+      ".venv",
+      ".vscode",
+      "_codex_worktrees",
+      "_merge_logs",
+      "docs",
+      "migrations",
+      "scripts",
+      "src",
+      "tests",
+      "tools",
+      "var"
+    ],
+    "top_level_tracked_file_counts": {
+      ".env.example": 1,
+      ".gitignore": 1,
+      "README.md": 1,
+      "docs": 2,
+      "init_wave1.py": 1,
+      "migrations": 4,
+      "pyproject.toml": 1,
+      "requirements-dev.txt": 1,
+      "requirements.txt": 1,
+      "scripts": 2,
+      "src": 22,
+      "tests": 1,
+      "tools": 5
+    },
+    "tracked_extension_counts": {
+      ".example": 1,
+      ".ini": 1,
+      ".json": 2,
+      ".mako": 1,
+      ".md": 1,
+      ".ps1": 3,
+      ".py": 30,
+      ".toml": 1,
+      ".txt": 2,
+      "<no_ext>": 1
+    }
+  },
+  "repo": {
+    "branch": "main",
+    "has_git": true,
+    "head_commit": "2c7ec4d371f68182b7d8814325bf82cd2b97ff9b",
+    "origin_url": "https://github.com/alanharrryy-wq/HITECH_FORMS.git",
+    "remotes_raw": [
+      "origin\thttps://github.com/alanharrryy-wq/HITECH_FORMS.git (fetch)",
+      "origin\thttps://github.com/alanharrryy-wq/HITECH_FORMS.git (push)"
+    ],
+    "root": "F:\\repos\\HITECH_FORMS"
+  },
+  "runtime": {
+    "platform": "win32",
+    "python_version": "3.12.10"
+  },
+  "schema_version": "1.0.0",
+  "tooling": {
+    "mypy": "PRESENT",
+    "pyproject_present": true,
+    "pytest": "PRESENT",
+    "requirements_files": [
+      "requirements-dev.txt",
+      "requirements.txt"
+    ],
+    "ruff": "PRESENT"
+  }
+}
