@@ -63,8 +63,8 @@ class SubmissionRepository:
             select(Submission)
             .where(Submission.form_id == form_id)
             .order_by(
-                getattr(Submission, SUBMISSION_ORDER[0]).asc(),
-                getattr(Submission, SUBMISSION_ORDER[1]).asc(),
+                getattr(Submission, SUBMISSION_ORDER[0]).desc(),
+                getattr(Submission, SUBMISSION_ORDER[1]).desc(),
             )
             .offset(offset)
             .limit(limit)
@@ -88,8 +88,8 @@ class SubmissionRepository:
             select(Submission)
             .where(Submission.form_id == form_id)
             .order_by(
-                getattr(Submission, SUBMISSION_ORDER[0]).asc(),
-                getattr(Submission, SUBMISSION_ORDER[1]).asc(),
+                getattr(Submission, SUBMISSION_ORDER[0]).desc(),
+                getattr(Submission, SUBMISSION_ORDER[1]).desc(),
             )
             .options(selectinload(Submission.answers))
         )

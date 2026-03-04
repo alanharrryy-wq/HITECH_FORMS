@@ -26,6 +26,9 @@ Deterministic industrial MVP for managed forms: create/edit/publish forms, colle
 - `python -m hitech_forms.ops.cli quality-check`
 - `python -m hitech_forms.ops.ci lint`
 - `python -m hitech_forms.ops.ci typecheck`
+- `python -m hitech_forms.ops.cli webhooks run-once --limit 50`
+- `python -m hitech_forms.ops.cli webhooks run-loop --interval 5 --limit 50`
+- `python -m hitech_forms.ops.cli demo run --output-root var/demo_runs --submissions 10`
 
 ## Dev Workflow
 
@@ -54,6 +57,47 @@ Deterministic industrial MVP for managed forms: create/edit/publish forms, colle
 - Stable query ordering on list and pagination endpoints.
 - Canonical JSON serialization for API responses.
 - Stable CSV header and row ordering.
+
+## Reliability Flags (Railway/Prod)
+
+All new reliability features are disabled by default.
+
+- `HFORMS_FEATURE_WEBHOOKS_OUTBOX=false`
+- `HFORMS_FEATURE_RATE_LIMIT=false`
+- `HFORMS_FEATURE_METRICS=false`
+- `HFORMS_WEBHOOK_TARGET_URL=`
+- `HFORMS_WEBHOOK_MAX_ATTEMPTS=8`
+- `HFORMS_WEBHOOK_BASE_BACKOFF_SECONDS=5`
+- `HFORMS_WEBHOOK_JITTER=0`
+- `HFORMS_RATE_LIMIT_RPS_PUBLIC=0`
+- `HFORMS_RATE_LIMIT_RPS_ADMIN=0`
+
+Recommended Railway rollout:
+1. Enable `HFORMS_FEATURE_WEBHOOKS_OUTBOX=true` and set `HFORMS_WEBHOOK_TARGET_URL`.
+2. Run worker as a separate command process:
+   - `python -m hitech_forms.ops.cli webhooks run-loop --interval 5 --limit 50`
+3. Enable rate limiting with conservative values:
+   - `HFORMS_FEATURE_RATE_LIMIT=true`
+   - `HFORMS_RATE_LIMIT_RPS_PUBLIC=<value>`
+   - `HFORMS_RATE_LIMIT_RPS_ADMIN=<value>`
+4. Enable metrics only if needed:
+   - `HFORMS_FEATURE_METRICS=true`
+
+## Demo Evidence Run
+
+Use deterministic demo tooling to produce investor artifacts:
+
+- `python -m hitech_forms.ops.cli demo run --output-root var/demo_runs --submissions 10`
+- Optional webhook processing during the run:
+  - add `--run-webhooks true`
+- Optional timestamp-based run folder:
+  - add `--with-timestamp true`
+
+Artifacts are written per run folder:
+- `logs/events.jsonl`
+- `exported.csv`
+- `summary.json` (canonical)
+- `env_snapshot.txt` (secrets redacted)
 
 ## Migration Strategy
 

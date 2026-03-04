@@ -29,7 +29,7 @@ HITECH_FORMS is an MVP kernel for deterministic form lifecycle management:
 - Stable slug normalization and collision suffixing.
 - Stable ordering in list endpoints: `created_at`, then `id`.
 - Stable field ordering: `position`, then `id`.
-- Stable submission ordering: `created_at`, then `id`.
+- Stable submission ordering: `created_at DESC`, then `id DESC`.
 - Per-form submission sequence is monotonic (`submission_seq` starts at 1).
 - Canonical JSON: sorted keys and compact separators.
 - CSV export includes headers and deterministic column order.

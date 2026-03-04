@@ -1,0 +1,2903 @@
+diff --git a/.env.example b/.env.example
+index e4f49a2..6842fa6 100644
+--- a/.env.example
++++ b/.env.example
+@@ -4,5 +4,14 @@ HFORMS_PORT=8000
+ HFORMS_ADMIN_TOKEN=change-me
+ HFORMS_TIMEZONE=UTC
+ HFORMS_RATE_LIMIT_PER_MINUTE=300
++HFORMS_FEATURE_WEBHOOKS_OUTBOX=false
++HFORMS_FEATURE_RATE_LIMIT=false
++HFORMS_FEATURE_METRICS=false
++HFORMS_WEBHOOK_TARGET_URL=
++HFORMS_WEBHOOK_MAX_ATTEMPTS=8
++HFORMS_WEBHOOK_BASE_BACKOFF_SECONDS=5
++HFORMS_WEBHOOK_JITTER=0
++HFORMS_RATE_LIMIT_RPS_PUBLIC=0
++HFORMS_RATE_LIMIT_RPS_ADMIN=0
+ HFORMS_LOG_LEVEL=INFO
+ HFORMS_FLAG_DEMO=false
+diff --git a/README.md b/README.md
+index df44f23..00a84d7 100644
+--- a/README.md
++++ b/README.md
+@@ -26,6 +26,9 @@ Deterministic industrial MVP for managed forms: create/edit/publish forms, colle
+ - `python -m hitech_forms.ops.cli quality-check`
+ - `python -m hitech_forms.ops.ci lint`
+ - `python -m hitech_forms.ops.ci typecheck`
++- `python -m hitech_forms.ops.cli webhooks run-once --limit 50`
++- `python -m hitech_forms.ops.cli webhooks run-loop --interval 5 --limit 50`
++- `python -m hitech_forms.ops.cli demo run --output-root var/demo_runs --submissions 10`
+ 
+ ## Dev Workflow
+ 
+@@ -55,6 +58,47 @@ Deterministic industrial MVP for managed forms: create/edit/publish forms, colle
+ - Canonical JSON serialization for API responses.
+ - Stable CSV header and row ordering.
+ 
++## Reliability Flags (Railway/Prod)
++
++All new reliability features are disabled by default.
++
++- `HFORMS_FEATURE_WEBHOOKS_OUTBOX=false`
++- `HFORMS_FEATURE_RATE_LIMIT=false`
++- `HFORMS_FEATURE_METRICS=false`
++- `HFORMS_WEBHOOK_TARGET_URL=`
++- `HFORMS_WEBHOOK_MAX_ATTEMPTS=8`
++- `HFORMS_WEBHOOK_BASE_BACKOFF_SECONDS=5`
++- `HFORMS_WEBHOOK_JITTER=0`
++- `HFORMS_RATE_LIMIT_RPS_PUBLIC=0`
++- `HFORMS_RATE_LIMIT_RPS_ADMIN=0`
++
++Recommended Railway rollout:
++1. Enable `HFORMS_FEATURE_WEBHOOKS_OUTBOX=true` and set `HFORMS_WEBHOOK_TARGET_URL`.
++2. Run worker as a separate command process:
++   - `python -m hitech_forms.ops.cli webhooks run-loop --interval 5 --limit 50`
++3. Enable rate limiting with conservative values:
++   - `HFORMS_FEATURE_RATE_LIMIT=true`
++   - `HFORMS_RATE_LIMIT_RPS_PUBLIC=<value>`
++   - `HFORMS_RATE_LIMIT_RPS_ADMIN=<value>`
++4. Enable metrics only if needed:
++   - `HFORMS_FEATURE_METRICS=true`
++
++## Demo Evidence Run
++
++Use deterministic demo tooling to produce investor artifacts:
++
++- `python -m hitech_forms.ops.cli demo run --output-root var/demo_runs --submissions 10`
++- Optional webhook processing during the run:
++  - add `--run-webhooks true`
++- Optional timestamp-based run folder:
++  - add `--with-timestamp true`
++
++Artifacts are written per run folder:
++- `logs/events.jsonl`
++- `exported.csv`
++- `summary.json` (canonical)
++- `env_snapshot.txt` (secrets redacted)
++
+ ## Migration Strategy
+ 
+ - One linear Alembic history (`0001_initial` baseline).
+diff --git a/docs/API.md b/docs/API.md
+index d9a92e2..5d2e864 100644
+--- a/docs/API.md
++++ b/docs/API.md
+@@ -5,6 +5,11 @@ All admin endpoints require `X-Admin-Token` (or `?token=` for SSR navigation).
+ ## Health
+ 
+ - `GET /api/health`
++- `GET /api/health/db`
++
++## Metrics
++
++- `GET /api/metrics` (feature-flagged by `HFORMS_FEATURE_METRICS`)
+ 
+ ## Admin Forms
+ 
+diff --git a/docs/KERNEL_CONTEXT.md b/docs/KERNEL_CONTEXT.md
+index a250369..2b8eff5 100644
+--- a/docs/KERNEL_CONTEXT.md
++++ b/docs/KERNEL_CONTEXT.md
+@@ -29,7 +29,7 @@ HITECH_FORMS is an MVP kernel for deterministic form lifecycle management:
+ - Stable slug normalization and collision suffixing.
+ - Stable ordering in list endpoints: `created_at`, then `id`.
+ - Stable field ordering: `position`, then `id`.
+-- Stable submission ordering: `created_at`, then `id`.
++- Stable submission ordering: `created_at DESC`, then `id DESC`.
+ - Per-form submission sequence is monotonic (`submission_seq` starts at 1).
+ - Canonical JSON: sorted keys and compact separators.
+ - CSV export includes headers and deterministic column order.
+diff --git a/src/hitech_forms/api/router.py b/src/hitech_forms/api/router.py
+index 234219f..a9996b8 100644
+--- a/src/hitech_forms/api/router.py
++++ b/src/hitech_forms/api/router.py
+@@ -7,11 +7,13 @@ from hitech_forms.api.routers import (
+     build_admin_forms_router,
+     build_admin_submissions_router,
+     build_health_router,
++    build_metrics_router,
+     build_public_forms_router,
+ )
+ 
+ api_router = APIRouter(prefix="/api")
+ api_router.include_router(build_health_router())
++api_router.include_router(build_metrics_router())
+ api_router.include_router(build_admin_forms_router())
+ api_router.include_router(build_admin_submissions_router())
+ api_router.include_router(build_admin_export_router())
+diff --git a/src/hitech_forms/api/routers/__init__.py b/src/hitech_forms/api/routers/__init__.py
+index f6818b0..091b567 100644
+--- a/src/hitech_forms/api/routers/__init__.py
++++ b/src/hitech_forms/api/routers/__init__.py
+@@ -2,6 +2,7 @@ from hitech_forms.api.routers.admin_export import build_admin_export_router
+ from hitech_forms.api.routers.admin_forms import build_admin_forms_router
+ from hitech_forms.api.routers.admin_submissions import build_admin_submissions_router
+ from hitech_forms.api.routers.health import build_health_router
++from hitech_forms.api.routers.metrics import build_metrics_router
+ from hitech_forms.api.routers.public_forms import build_public_forms_router
+ 
+ __all__ = [
+@@ -9,5 +10,6 @@ __all__ = [
+     "build_admin_forms_router",
+     "build_admin_submissions_router",
+     "build_admin_export_router",
++    "build_metrics_router",
+     "build_public_forms_router",
+ ]
+diff --git a/src/hitech_forms/api/routers/health.py b/src/hitech_forms/api/routers/health.py
+index a2a91f1..45f7f9b 100644
+--- a/src/hitech_forms/api/routers/health.py
++++ b/src/hitech_forms/api/routers/health.py
+@@ -1,8 +1,10 @@
+ from __future__ import annotations
+ 
+ from fastapi import APIRouter
++from sqlalchemy import text
+ 
+ from hitech_forms.app.responses import canonical_json_response
++from hitech_forms.db import get_engine
+ 
+ 
+ def build_health_router() -> APIRouter:
+@@ -13,4 +15,16 @@ def build_health_router() -> APIRouter:
+         payload = {"ok": True, "service": "HITECH_FORMS"}
+         return canonical_json_response(payload)
+ 
++    @router.get("/health/db")
++    def health_db():
++        db_ok = False
++        try:
++            with get_engine().connect() as connection:
++                connection.execute(text("SELECT 1"))
++            db_ok = True
++        except Exception:
++            db_ok = False
++        payload = {"ok": db_ok, "service": "HITECH_FORMS", "db_ok": db_ok}
++        return canonical_json_response(payload, status_code=200 if db_ok else 503)
++
+     return router
+diff --git a/src/hitech_forms/api/routers/public_forms.py b/src/hitech_forms/api/routers/public_forms.py
+index 6529185..99226f1 100644
+--- a/src/hitech_forms/api/routers/public_forms.py
++++ b/src/hitech_forms/api/routers/public_forms.py
+@@ -2,10 +2,14 @@ from __future__ import annotations
+ 
+ from typing import Any
+ 
+-from fastapi import APIRouter, Depends
++from fastapi import APIRouter, Depends, Request
+ from pydantic import BaseModel
+ 
+-from hitech_forms.app.dependencies import get_form_service, get_submission_service
++from hitech_forms.app.dependencies import (
++    enforce_public_submission_rate_limit,
++    get_form_service,
++    get_submission_service,
++)
+ from hitech_forms.app.responses import canonical_json_response
+ from hitech_forms.contracts import FormServicePort, SubmissionServicePort
+ 
+@@ -25,8 +29,10 @@ def build_public_forms_router() -> APIRouter:
+     def public_submit_form(
+         slug: str,
+         payload: SubmitFormRequest,
++        request: Request,
+         submission_service: SubmissionServicePort = Depends(get_submission_service),
+     ):
++        enforce_public_submission_rate_limit(request)
+         created: dict[str, Any] = submission_service.command_submit_public(slug=slug, values=payload.values)
+         return canonical_json_response(created, status_code=201)
+ 
+diff --git a/src/hitech_forms/app/dependencies.py b/src/hitech_forms/app/dependencies.py
+index 3b0d699..6532c9d 100644
+--- a/src/hitech_forms/app/dependencies.py
++++ b/src/hitech_forms/app/dependencies.py
+@@ -6,16 +6,57 @@ from sqlalchemy.orm import Session
+ from hitech_forms.app.security.rate_limit import InMemoryRateLimiter
+ from hitech_forms.contracts import ExportServicePort, FormServicePort, SubmissionServicePort
+ from hitech_forms.db import get_session
+-from hitech_forms.db.repositories import FormRepository, SubmissionRepository
+-from hitech_forms.platform.errors import unauthorized
+-from hitech_forms.platform.logging import get_logger, log_security_event
++from hitech_forms.db.repositories import (
++    FormRepository,
++    SubmissionRepository,
++    WebhookOutboxRepository,
++)
++from hitech_forms.platform.errors import AppError, unauthorized
++from hitech_forms.platform.logging import get_logger, log_event, log_security_event
+ from hitech_forms.platform.settings import get_settings
+-from hitech_forms.services import ExportService, FormService, SubmissionService
++from hitech_forms.services import (
++    ExportService,
++    FormService,
++    SubmissionService,
++    WebhookOutboxService,
++)
+ 
+ _rate_limiter = InMemoryRateLimiter()
+ _logger = get_logger("hitech_forms.security")
+ 
+ 
++def _rate_limit_identity(request: Request) -> str:
++    return request.client.host if request.client else "unknown"
++
++
++def _enforce_rate_limit(request: Request, *, scope: str, limit_rps: int) -> None:
++    settings = get_settings()
++    if not settings.feature_rate_limit or limit_rps <= 0:
++        return
++    identity = _rate_limit_identity(request)
++    _rate_limiter.check(key=identity, scope=scope, limit_rps=limit_rps)
++
++
++def enforce_public_submission_rate_limit(request: Request) -> None:
++    settings = get_settings()
++    try:
++        _enforce_rate_limit(
++            request,
++            scope="public_submission",
++            limit_rps=settings.rate_limit_rps_public,
++        )
++    except AppError:
++        log_event(
++            _logger,
++            "rate_limit_triggered",
++            scope="public_submission",
++            method=request.method,
++            path=request.url.path,
++            client=_rate_limit_identity(request),
++        )
++        raise
++
++
+ async def admin_guard(
+     request: Request,
+     x_admin_token: str | None = Header(default=None, alias="X-Admin-Token"),
+@@ -36,12 +77,21 @@ async def admin_guard(
+             "admin_auth_failed",
+             method=request.method,
+             path=request.url.path,
+-            client=(request.client.host if request.client else "unknown"),
++            client=_rate_limit_identity(request),
+         )
+         raise unauthorized()
+-    scope = "admin"
+-    identity = request.client.host if request.client else "unknown"
+-    _rate_limiter.check(key=identity, scope=scope, limit_per_minute=settings.rate_limit_per_minute)
++    try:
++        _enforce_rate_limit(request, scope="admin", limit_rps=settings.rate_limit_rps_admin)
++    except AppError:
++        log_security_event(
++            _logger,
++            "rate_limit_triggered",
++            scope="admin",
++            method=request.method,
++            path=request.url.path,
++            client=_rate_limit_identity(request),
++        )
++        raise
+ 
+ 
+ def get_form_service(session: Session = Depends(get_session)) -> FormServicePort:
+@@ -49,8 +99,18 @@ def get_form_service(session: Session = Depends(get_session)) -> FormServicePort
+ 
+ 
+ def get_submission_service(session: Session = Depends(get_session)) -> SubmissionServicePort:
+-    return SubmissionService(FormRepository(session), SubmissionRepository(session))
++    settings = get_settings()
++    webhook_service = WebhookOutboxService(WebhookOutboxRepository(session), settings)
++    return SubmissionService(
++        FormRepository(session),
++        SubmissionRepository(session),
++        webhook_outbox_service=webhook_service,
++    )
+ 
+ 
+ def get_export_service(session: Session = Depends(get_session)) -> ExportServicePort:
+     return ExportService(FormRepository(session), SubmissionRepository(session))
++
++
++def reset_rate_limiter_cache() -> None:
++    _rate_limiter.reset()
+diff --git a/src/hitech_forms/app/lifespan.py b/src/hitech_forms/app/lifespan.py
+index c008e0a..a090cbc 100644
+--- a/src/hitech_forms/app/lifespan.py
++++ b/src/hitech_forms/app/lifespan.py
+@@ -1,9 +1,11 @@
+ from __future__ import annotations
+ 
++import hashlib
+ from contextlib import asynccontextmanager
+ 
+ from hitech_forms.platform.determinism import ensure_determinism_env
+-from hitech_forms.platform.logging import configure_logging
++from hitech_forms.platform.logging import configure_logging, get_logger, log_event
++from hitech_forms.platform.request_context import reset_request_context, set_startup_seed
+ from hitech_forms.platform.settings import get_settings
+ 
+ 
+@@ -12,4 +14,9 @@ async def lifespan(app):
+     settings = get_settings()
+     configure_logging(settings.log_level)
+     ensure_determinism_env()
++    seed_source = f"{settings.db_path}|{settings.host}|{settings.port}"
++    startup_seed = hashlib.sha256(seed_source.encode("utf-8")).hexdigest()[:12]
++    set_startup_seed(startup_seed)
++    reset_request_context()
++    log_event(get_logger("hitech_forms.app"), "app_started", startup_seed=startup_seed)
+     yield
+diff --git a/src/hitech_forms/app/main.py b/src/hitech_forms/app/main.py
+index 52e96af..c354e8f 100644
+--- a/src/hitech_forms/app/main.py
++++ b/src/hitech_forms/app/main.py
+@@ -5,11 +5,13 @@ from fastapi.exceptions import RequestValidationError
+ 
+ from hitech_forms.api.router import api_router
+ from hitech_forms.app.lifespan import lifespan
++from hitech_forms.app.middleware import request_context_middleware
+ from hitech_forms.app.responses import canonical_json_response
+ from hitech_forms.platform.errors import AppError
+ from hitech_forms.web.router import web_router
+ 
+ app = FastAPI(title="HITECH_FORMS", lifespan=lifespan)
++app.middleware("http")(request_context_middleware)
+ app.include_router(api_router)
+ app.include_router(web_router)
+ 
+diff --git a/src/hitech_forms/app/security/rate_limit.py b/src/hitech_forms/app/security/rate_limit.py
+index 17c170e..cf43910 100644
+--- a/src/hitech_forms/app/security/rate_limit.py
++++ b/src/hitech_forms/app/security/rate_limit.py
+@@ -1,18 +1,40 @@
+ from __future__ import annotations
+ 
+ from collections import defaultdict
+-from datetime import datetime, timezone
++from threading import Lock
+ 
++from hitech_forms.platform.determinism import utc_now_epoch
+ from hitech_forms.platform.errors import rate_limited
+ 
+ 
+ class InMemoryRateLimiter:
+     def __init__(self) -> None:
+         self._buckets: dict[tuple[str, str, int], int] = defaultdict(int)
++        self._lock = Lock()
+ 
+-    def check(self, *, key: str, scope: str, limit_per_minute: int) -> None:
+-        minute_bucket = int(datetime.now(timezone.utc).timestamp()) // 60
+-        bucket_key = (scope, key, minute_bucket)
+-        self._buckets[bucket_key] += 1
+-        if self._buckets[bucket_key] > limit_per_minute:
+-            raise rate_limited()
++    def check(self, *, key: str, scope: str, limit_rps: int) -> None:
++        if limit_rps <= 0:
++            return
++        second_bucket = utc_now_epoch()
++        bucket_key = (scope, key, second_bucket)
++        with self._lock:
++            self._cleanup(second_bucket)
++            self._buckets[bucket_key] += 1
++            count = self._buckets[bucket_key]
++        if count > limit_rps:
++            raise rate_limited(
++                details={
++                    "scope": scope,
++                    "limit_rps": limit_rps,
++                    "bucket_epoch": second_bucket,
++                }
++            )
++
++    def _cleanup(self, second_bucket: int) -> None:
++        stale_keys = [key for key in self._buckets if key[2] < second_bucket - 1]
++        for stale_key in stale_keys:
++            self._buckets.pop(stale_key, None)
++
++    def reset(self) -> None:
++        with self._lock:
++            self._buckets.clear()
+diff --git a/src/hitech_forms/db/models/__init__.py b/src/hitech_forms/db/models/__init__.py
+index 7b17743..990f142 100644
+--- a/src/hitech_forms/db/models/__init__.py
++++ b/src/hitech_forms/db/models/__init__.py
+@@ -6,5 +6,16 @@ from .field import Field
+ from .form import Form
+ from .form_version import FormVersion
+ from .submission import Submission
++from .webhook_delivery_log import WebhookDeliveryLog
++from .webhook_outbox import WebhookOutbox
+ 
+-__all__ = ["Base", "Form", "FormVersion", "Field", "Submission", "Answer"]
++__all__ = [
++    "Base",
++    "Form",
++    "FormVersion",
++    "Field",
++    "Submission",
++    "Answer",
++    "WebhookOutbox",
++    "WebhookDeliveryLog",
++]
+diff --git a/src/hitech_forms/db/repositories/__init__.py b/src/hitech_forms/db/repositories/__init__.py
+index 3d0f39a..6c49eab 100644
+--- a/src/hitech_forms/db/repositories/__init__.py
++++ b/src/hitech_forms/db/repositories/__init__.py
+@@ -1,4 +1,5 @@
+ from hitech_forms.db.repositories.form_repository import FormRepository
+ from hitech_forms.db.repositories.submission_repository import SubmissionRepository
++from hitech_forms.db.repositories.webhook_outbox_repository import WebhookOutboxRepository
+ 
+-__all__ = ["FormRepository", "SubmissionRepository"]
++__all__ = ["FormRepository", "SubmissionRepository", "WebhookOutboxRepository"]
+diff --git a/src/hitech_forms/db/repositories/submission_repository.py b/src/hitech_forms/db/repositories/submission_repository.py
+index afe2eac..9444120 100644
+--- a/src/hitech_forms/db/repositories/submission_repository.py
++++ b/src/hitech_forms/db/repositories/submission_repository.py
+@@ -63,8 +63,8 @@ class SubmissionRepository:
+             select(Submission)
+             .where(Submission.form_id == form_id)
+             .order_by(
+-                getattr(Submission, SUBMISSION_ORDER[0]).asc(),
+-                getattr(Submission, SUBMISSION_ORDER[1]).asc(),
++                getattr(Submission, SUBMISSION_ORDER[0]).desc(),
++                getattr(Submission, SUBMISSION_ORDER[1]).desc(),
+             )
+             .offset(offset)
+             .limit(limit)
+@@ -88,8 +88,8 @@ class SubmissionRepository:
+             select(Submission)
+             .where(Submission.form_id == form_id)
+             .order_by(
+-                getattr(Submission, SUBMISSION_ORDER[0]).asc(),
+-                getattr(Submission, SUBMISSION_ORDER[1]).asc(),
++                getattr(Submission, SUBMISSION_ORDER[0]).desc(),
++                getattr(Submission, SUBMISSION_ORDER[1]).desc(),
+             )
+             .options(selectinload(Submission.answers))
+         )
+diff --git a/src/hitech_forms/ops/cli.py b/src/hitech_forms/ops/cli.py
+index eaa55ef..60fce40 100644
+--- a/src/hitech_forms/ops/cli.py
++++ b/src/hitech_forms/ops/cli.py
+@@ -8,13 +8,19 @@ import typer
+ 
+ from hitech_forms.db import session_scope
+ from hitech_forms.db.repositories import FormRepository, SubmissionRepository
+-from hitech_forms.platform.determinism import ensure_determinism_env
++from hitech_forms.ops.demo import run_demo_evidence
++from hitech_forms.ops.webhooks import webhooks_run_loop, webhooks_run_once
++from hitech_forms.platform.determinism import canonical_json_dumps, ensure_determinism_env
+ from hitech_forms.platform.settings import get_settings
+ from hitech_forms.services import ExportService, FormService
+ 
+ app = typer.Typer(add_completion=False, help="HITECH_FORMS CLI")
+ db = typer.Typer(add_completion=False, help="Database commands")
++webhooks = typer.Typer(add_completion=False, help="Webhook worker commands")
++demo = typer.Typer(add_completion=False, help="Deterministic demo tooling")
+ app.add_typer(db, name="db")
++app.add_typer(webhooks, name="webhooks")
++app.add_typer(demo, name="demo")
+ 
+ 
+ def _run(cmd: list[str], env: dict[str, str] | None = None) -> None:
+@@ -81,6 +87,38 @@ def export_csv(form_id: int, output: str, version: str = "v1") -> None:
+     typer.echo(f"export-csv: wrote {output}")
+ 
+ 
++@webhooks.command("run-once")
++def webhooks_run_once_cmd(limit: int = 50) -> None:
++    summary = webhooks_run_once(limit=limit)
++    typer.echo(canonical_json_dumps(summary))
++
++
++@webhooks.command("run-loop")
++def webhooks_run_loop_cmd(interval: int = 5, limit: int = 50) -> None:
++    try:
++        webhooks_run_loop(interval_seconds=interval, limit=limit)
++    except KeyboardInterrupt:
++        typer.echo("webhooks run-loop: stopped")
++
++
++@demo.command("run")
++def demo_run_cmd(
++    output_root: str = "var/demo_runs",
++    submissions: int = 5,
++    run_id: str | None = None,
++    with_timestamp: bool = False,
++    run_webhooks: bool = False,
++) -> None:
++    summary = run_demo_evidence(
++        output_root=output_root,
++        submissions=submissions,
++        run_id=run_id,
++        with_timestamp=with_timestamp,
++        run_webhooks=run_webhooks,
++    )
++    typer.echo(canonical_json_dumps(summary))
++
++
+ @app.command("quality-check")
+ def quality_check(with_coverage: bool = False) -> None:
+     ensure_determinism_env()
+diff --git a/src/hitech_forms/platform/__init__.py b/src/hitech_forms/platform/__init__.py
+index e563d34..646aa94 100644
+--- a/src/hitech_forms/platform/__init__.py
++++ b/src/hitech_forms/platform/__init__.py
+@@ -2,7 +2,9 @@ from __future__ import annotations
+ 
+ from .determinism import canonical_json_dumps, ensure_determinism_env, freeze_clock, utc_now_epoch
+ from .errors import AppError
+-from .feature_flags import FeatureFlags, get_feature_flags
++from .feature_flags import FeatureFlags, get_feature_flags, reset_feature_flags_cache
++from .metrics import increment_counter, render_text_metrics, set_gauge, snapshot_metrics
++from .request_context import get_request_id
+ from .settings import Settings, get_settings
+ from .slug import slugify, stable_slug
+ 
+@@ -11,6 +13,12 @@ __all__ = [
+     "get_settings",
+     "FeatureFlags",
+     "get_feature_flags",
++    "reset_feature_flags_cache",
++    "increment_counter",
++    "set_gauge",
++    "snapshot_metrics",
++    "render_text_metrics",
++    "get_request_id",
+     "canonical_json_dumps",
+     "ensure_determinism_env",
+     "utc_now_epoch",
+diff --git a/src/hitech_forms/platform/feature_flags.py b/src/hitech_forms/platform/feature_flags.py
+index 0e907c1..c93daa1 100644
+--- a/src/hitech_forms/platform/feature_flags.py
++++ b/src/hitech_forms/platform/feature_flags.py
+@@ -1,24 +1,34 @@
+-from __future__ import annotations
+-
+-import os
+-from dataclasses import dataclass
+-
+-
+-def _env_bool(name: str, default: bool = False) -> bool:
+-    v = os.getenv(name, str(default)).strip().lower()
+-    return v in ("1", "true", "yes", "on")
+-
+-
+-@dataclass(frozen=True)
+-class FeatureFlags:
+-    demo: bool = _env_bool("HFORMS_FLAG_DEMO", False)
+-
+-
+-_FLAGS: FeatureFlags | None = None
+-
+-
+-def get_feature_flags() -> FeatureFlags:
+-    global _FLAGS
+-    if _FLAGS is None:
+-        _FLAGS = FeatureFlags()
+-    return _FLAGS
++from __future__ import annotations
++
++from dataclasses import dataclass
++
++from hitech_forms.platform.settings import get_settings
++
++
++@dataclass(frozen=True)
++class FeatureFlags:
++    demo: bool
++    webhooks_outbox: bool
++    rate_limit: bool
++    metrics: bool
++
++
++_FLAGS: FeatureFlags | None = None
++
++
++def get_feature_flags() -> FeatureFlags:
++    global _FLAGS
++    if _FLAGS is None:
++        settings = get_settings()
++        _FLAGS = FeatureFlags(
++            demo=settings.feature_demo,
++            webhooks_outbox=settings.feature_webhooks_outbox,
++            rate_limit=settings.feature_rate_limit,
++            metrics=settings.feature_metrics,
++        )
++    return _FLAGS
++
++
++def reset_feature_flags_cache() -> None:
++    global _FLAGS
++    _FLAGS = None
+diff --git a/src/hitech_forms/platform/logging.py b/src/hitech_forms/platform/logging.py
+index 2945a35..8a1120c 100644
+--- a/src/hitech_forms/platform/logging.py
++++ b/src/hitech_forms/platform/logging.py
+@@ -4,6 +4,7 @@ import logging
+ from typing import Any
+ 
+ from hitech_forms.platform.determinism import canonical_json_dumps, sorted_dict, utc_now_epoch
++from hitech_forms.platform.request_context import get_request_id, get_startup_seed
+ 
+ 
+ def configure_logging(level: str = "INFO") -> None:
+@@ -15,10 +16,27 @@ def get_logger(name: str) -> logging.Logger:
+ 
+ 
+ def log_event(logger: logging.Logger, event: str, **fields: Any) -> None:
+-    payload = sorted_dict({"event": event, "ts": utc_now_epoch(), **fields})
++    payload = sorted_dict(
++        {
++            "event": event,
++            "request_id": get_request_id() or "-",
++            "startup_seed": get_startup_seed(),
++            "ts": utc_now_epoch(),
++            **fields,
++        }
++    )
+     logger.info(canonical_json_dumps(payload))
+ 
+ 
+ def log_security_event(logger: logging.Logger, event: str, **fields: Any) -> None:
+-    payload = sorted_dict({"event": event, "security": True, "ts": utc_now_epoch(), **fields})
++    payload = sorted_dict(
++        {
++            "event": event,
++            "request_id": get_request_id() or "-",
++            "security": True,
++            "startup_seed": get_startup_seed(),
++            "ts": utc_now_epoch(),
++            **fields,
++        }
++    )
+     logger.warning(canonical_json_dumps(payload))
+diff --git a/src/hitech_forms/platform/settings.py b/src/hitech_forms/platform/settings.py
+index 1dc966d..7072496 100644
+--- a/src/hitech_forms/platform/settings.py
++++ b/src/hitech_forms/platform/settings.py
+@@ -14,6 +14,16 @@ class Settings:
+     timezone: str
+     rate_limit_per_minute: int
+     log_level: str
++    feature_demo: bool
++    feature_webhooks_outbox: bool
++    feature_rate_limit: bool
++    feature_metrics: bool
++    webhook_target_url: str
++    webhook_max_attempts: int
++    webhook_base_backoff_seconds: int
++    webhook_jitter: int
++    rate_limit_rps_public: int
++    rate_limit_rps_admin: int
+ 
+ 
+ _SETTINGS: Settings | None = None
+@@ -27,6 +37,15 @@ def _env_int(name: str, default: int) -> int:
+         raise RuntimeError(f"Invalid integer for {name}: {value}") from exc
+ 
+ 
++def _env_bool(name: str, default: bool = False) -> bool:
++    value = os.getenv(name, str(default)).strip().lower()
++    if value in {"1", "true", "yes", "on"}:
++        return True
++    if value in {"0", "false", "no", "off"}:
++        return False
++    raise RuntimeError(f"Invalid boolean for {name}: {value}")
++
++
+ def _load_settings() -> Settings:
+     return Settings(
+         db_path=os.getenv("HFORMS_DB_PATH", "var/hitech_forms.db").strip(),
+@@ -36,6 +55,16 @@ def _load_settings() -> Settings:
+         timezone=os.getenv("HFORMS_TIMEZONE", "UTC").strip().upper(),
+         rate_limit_per_minute=_env_int("HFORMS_RATE_LIMIT_PER_MINUTE", 300),
+         log_level=os.getenv("HFORMS_LOG_LEVEL", "INFO").strip().upper(),
++        feature_demo=_env_bool("HFORMS_FLAG_DEMO", False),
++        feature_webhooks_outbox=_env_bool("HFORMS_FEATURE_WEBHOOKS_OUTBOX", False),
++        feature_rate_limit=_env_bool("HFORMS_FEATURE_RATE_LIMIT", False),
++        feature_metrics=_env_bool("HFORMS_FEATURE_METRICS", False),
++        webhook_target_url=os.getenv("HFORMS_WEBHOOK_TARGET_URL", "").strip(),
++        webhook_max_attempts=_env_int("HFORMS_WEBHOOK_MAX_ATTEMPTS", 8),
++        webhook_base_backoff_seconds=_env_int("HFORMS_WEBHOOK_BASE_BACKOFF_SECONDS", 5),
++        webhook_jitter=_env_int("HFORMS_WEBHOOK_JITTER", 0),
++        rate_limit_rps_public=_env_int("HFORMS_RATE_LIMIT_RPS_PUBLIC", 0),
++        rate_limit_rps_admin=_env_int("HFORMS_RATE_LIMIT_RPS_ADMIN", 0),
+     )
+ 
+ 
+@@ -46,8 +75,18 @@ def validate_settings(settings: Settings) -> None:
+         raise RuntimeError("HFORMS_TIMEZONE must be UTC for deterministic behavior.")
+     db_parent = Path(settings.db_path).resolve().parent
+     db_parent.mkdir(parents=True, exist_ok=True)
+-    if settings.rate_limit_per_minute < 1:
+-        raise RuntimeError("HFORMS_RATE_LIMIT_PER_MINUTE must be >= 1.")
++    if settings.rate_limit_per_minute < 0:
++        raise RuntimeError("HFORMS_RATE_LIMIT_PER_MINUTE must be >= 0.")
++    if settings.webhook_max_attempts < 1:
++        raise RuntimeError("HFORMS_WEBHOOK_MAX_ATTEMPTS must be >= 1.")
++    if settings.webhook_base_backoff_seconds < 1:
++        raise RuntimeError("HFORMS_WEBHOOK_BASE_BACKOFF_SECONDS must be >= 1.")
++    if settings.webhook_jitter < 0:
++        raise RuntimeError("HFORMS_WEBHOOK_JITTER must be >= 0.")
++    if settings.rate_limit_rps_public < 0:
++        raise RuntimeError("HFORMS_RATE_LIMIT_RPS_PUBLIC must be >= 0.")
++    if settings.rate_limit_rps_admin < 0:
++        raise RuntimeError("HFORMS_RATE_LIMIT_RPS_ADMIN must be >= 0.")
+ 
+ 
+ def get_settings() -> Settings:
+diff --git a/src/hitech_forms/services/__init__.py b/src/hitech_forms/services/__init__.py
+index 1f83eea..a655545 100644
+--- a/src/hitech_forms/services/__init__.py
++++ b/src/hitech_forms/services/__init__.py
+@@ -1,5 +1,6 @@
+ from hitech_forms.services.export_service import ExportService
+ from hitech_forms.services.form_service import FormService
+ from hitech_forms.services.submission_service import SubmissionService
++from hitech_forms.services.webhooks import WebhookOutboxService, WebhookWorker
+ 
+-__all__ = ["FormService", "SubmissionService", "ExportService"]
++__all__ = ["FormService", "SubmissionService", "ExportService", "WebhookOutboxService", "WebhookWorker"]
+diff --git a/src/hitech_forms/services/submission_service.py b/src/hitech_forms/services/submission_service.py
+index 809de34..5964793 100644
+--- a/src/hitech_forms/services/submission_service.py
++++ b/src/hitech_forms/services/submission_service.py
+@@ -16,15 +16,25 @@ from hitech_forms.contracts import (
+ from hitech_forms.db.models import Field
+ from hitech_forms.platform.determinism import utc_now_epoch
+ from hitech_forms.platform.errors import bad_request
++from hitech_forms.platform.logging import get_logger, log_event
++from hitech_forms.platform.metrics import increment_counter
+ from hitech_forms.platform.slug import slugify
++from hitech_forms.services.webhooks import WebhookOutboxService
+ 
+ _EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
+ 
+ 
+ class SubmissionService:
+-    def __init__(self, form_repo: FormRepositoryPort, submission_repo: SubmissionRepositoryPort):
++    def __init__(
++        self,
++        form_repo: FormRepositoryPort,
++        submission_repo: SubmissionRepositoryPort,
++        webhook_outbox_service: WebhookOutboxService | None = None,
++    ):
+         self._form_repo = form_repo
+         self._submission_repo = submission_repo
++        self._webhook_outbox_service = webhook_outbox_service
++        self._logger = get_logger("hitech_forms.submissions")
+ 
+     def command_submit_public(self, *, slug: str, values: dict[str, str]) -> dict:
+         form = self._form_repo.get_form_by_slug(slugify(slug))
+@@ -44,6 +54,25 @@ class SubmissionService:
+             answers=normalized_answers,
+             now_epoch=utc_now_epoch(),
+         )
++        increment_counter("submissions_total", 1)
++        log_event(
++            self._logger,
++            "submission_accepted",
++            form_id=form.id,
++            form_version_id=version.id,
++            submission_id=submission.id,
++            submission_seq=submission.submission_seq,
++        )
++        if self._webhook_outbox_service is not None:
++            self._webhook_outbox_service.enqueue_submission(
++                form_id=form.id,
++                form_version_id=version.id,
++                submission_id=submission.id,
++                submission_seq=submission.submission_seq,
++                created_at=submission.created_at,
++                slug=form.slug,
++                answers=normalized_answers,
++            )
+         return asdict(
+             SubmissionSummaryDTO(
+                 id=submission.id,
+diff --git a/src/hitech_forms/web/routers/public_forms.py b/src/hitech_forms/web/routers/public_forms.py
+index ade0de2..5b35d94 100644
+--- a/src/hitech_forms/web/routers/public_forms.py
++++ b/src/hitech_forms/web/routers/public_forms.py
+@@ -3,7 +3,11 @@ from __future__ import annotations
+ from fastapi import APIRouter, Depends, Request
+ from fastapi.responses import HTMLResponse
+ 
+-from hitech_forms.app.dependencies import get_form_service, get_submission_service
++from hitech_forms.app.dependencies import (
++    enforce_public_submission_rate_limit,
++    get_form_service,
++    get_submission_service,
++)
+ from hitech_forms.contracts import FormServicePort, SubmissionServicePort
+ from hitech_forms.web.routers.common import redirect, templates
+ 
+@@ -27,6 +31,7 @@ def build_public_forms_web_router() -> APIRouter:
+         form_service: FormServicePort = Depends(get_form_service),
+         submission_service: SubmissionServicePort = Depends(get_submission_service),
+     ):
++        enforce_public_submission_rate_limit(request)
+         raw_form = await request.form()
+         values = {str(key): str(value) for key, value in raw_form.multi_items()}
+         try:
+diff --git a/tests/conftest.py b/tests/conftest.py
+index 0d19b54..763560b 100644
+--- a/tests/conftest.py
++++ b/tests/conftest.py
+@@ -37,15 +37,30 @@ def runtime_env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> dict[str, st
+     monkeypatch.setenv("HFORMS_ADMIN_TOKEN", "test-admin-token")
+     monkeypatch.setenv("HFORMS_TIMEZONE", "UTC")
+     monkeypatch.setenv("HFORMS_RATE_LIMIT_PER_MINUTE", "999999")
++    monkeypatch.setenv("HFORMS_FEATURE_WEBHOOKS_OUTBOX", "false")
++    monkeypatch.setenv("HFORMS_FEATURE_RATE_LIMIT", "false")
++    monkeypatch.setenv("HFORMS_FEATURE_METRICS", "false")
++    monkeypatch.setenv("HFORMS_WEBHOOK_TARGET_URL", "")
++    monkeypatch.setenv("HFORMS_WEBHOOK_MAX_ATTEMPTS", "8")
++    monkeypatch.setenv("HFORMS_WEBHOOK_BASE_BACKOFF_SECONDS", "5")
++    monkeypatch.setenv("HFORMS_WEBHOOK_JITTER", "0")
++    monkeypatch.setenv("HFORMS_RATE_LIMIT_RPS_PUBLIC", "0")
++    monkeypatch.setenv("HFORMS_RATE_LIMIT_RPS_ADMIN", "0")
+     monkeypatch.setenv("PYTHONHASHSEED", "0")
+     monkeypatch.setenv("HFORMS_FIXED_NOW", "1700000000")
+     _run_alembic_upgrade(db_path)
+ 
++    from hitech_forms.app.dependencies import reset_rate_limiter_cache
+     from hitech_forms.db.engine import reset_engine_cache
++    from hitech_forms.platform.feature_flags import reset_feature_flags_cache
++    from hitech_forms.platform.metrics import reset_metrics
+     from hitech_forms.platform.settings import reset_settings_cache
+ 
+     reset_settings_cache()
++    reset_feature_flags_cache()
+     reset_engine_cache()
++    reset_metrics()
++    reset_rate_limiter_cache()
+     return {"db_path": str(db_path), "admin_token": "test-admin-token"}
+ 
+ 
+diff --git a/tests/e2e/test_smoke_health.py b/tests/e2e/test_smoke_health.py
+index e99d378..3e25fac 100644
+--- a/tests/e2e/test_smoke_health.py
++++ b/tests/e2e/test_smoke_health.py
+@@ -9,6 +9,10 @@ async def test_smoke_health(client, runtime_env):
+     assert health.status_code == 200
+     assert health.json() == {"ok": True, "service": "HITECH_FORMS"}
+ 
++    health_db = await client.get("/api/health/db")
++    assert health_db.status_code == 200
++    assert health_db.json() == {"db_ok": True, "ok": True, "service": "HITECH_FORMS"}
++
+     token = runtime_env["admin_token"]
+     admin = await client.get(f"/admin/forms?token={token}")
+     assert admin.status_code == 200
+diff --git a/tests/integration/test_form_lifecycle.py b/tests/integration/test_form_lifecycle.py
+index c4a81a7..8e210f4 100644
+--- a/tests/integration/test_form_lifecycle.py
++++ b/tests/integration/test_form_lifecycle.py
+@@ -98,8 +98,8 @@ async def test_export_csv_headers_and_order(client, runtime_env):
+     assert export.status_code == 200
+     lines = export.text.strip().splitlines()
+     assert lines[0] == "submission_id,created_at,name,email,priority,notify"
+-    assert lines[1] == "1,1700000000,Alice,alice@example.com,low,true"
+-    assert lines[2] == "2,1700000000,Bob,bob@example.com,high,true"
++    assert lines[1] == "2,1700000000,Bob,bob@example.com,high,true"
++    assert lines[2] == "1,1700000000,Alice,alice@example.com,low,true"
+ 
+ 
+ @pytest.mark.anyio
+diff --git a/tests/integration/test_migrations.py b/tests/integration/test_migrations.py
+index b75819e..07dc18f 100644
+--- a/tests/integration/test_migrations.py
++++ b/tests/integration/test_migrations.py
+@@ -44,6 +44,8 @@ def test_migration_replay_and_reflection(runtime_env):
+         "fields",
+         "submissions",
+         "answers",
++        "webhook_outbox",
++        "webhook_delivery_log",
+     }
+ 
+     forms_indexes = {index["name"] for index in inspector.get_indexes("forms")}
+diff --git a/tests/integration/test_submission_invariants.py b/tests/integration/test_submission_invariants.py
+index b678af0..e798d6f 100644
+--- a/tests/integration/test_submission_invariants.py
++++ b/tests/integration/test_submission_invariants.py
+@@ -41,7 +41,7 @@ async def test_submission_seq_is_unique_and_monotonic_per_form_under_concurrency
+     assert listed.status_code == 200
+     list_payload = listed.json()
+     assert [item["submission_seq"] for item in list_payload["items"]] == list(
+-        range(1, submit_count + 1)
++        range(submit_count, 0, -1)
+     )
+ 
+ 
+diff --git a/docs/dev/BLOCK_WEBHOOKS_OBS_PLAN.md b/docs/dev/BLOCK_WEBHOOKS_OBS_PLAN.md
+new file mode 100644
+index 0000000..7bad31b
+--- /dev/null
++++ b/docs/dev/BLOCK_WEBHOOKS_OBS_PLAN.md
+@@ -0,0 +1,61 @@
++# BLOCK_WEBHOOKS_OBS Plan
++
++## Scope Alignment
++- Keep boundaries: API/Web -> Services -> Repositories -> ORM.
++- Keep deterministic behavior: `PYTHONHASHSEED=0`, UTC timestamps, canonical JSON, stable ordering.
++- Add all new behavior behind feature flags defaulting to OFF.
++
++## Planned Module Additions
++- `src/hitech_forms/platform/settings.py`
++  - Add env-backed flags and webhook/rate-limit tuning values.
++- `src/hitech_forms/platform/metrics.py` (new)
++  - Minimal in-process counters and text exposition.
++- `src/hitech_forms/app/middleware/request_context.py` (new)
++  - Correlation ID handling and request-scoped context.
++- `src/hitech_forms/app/security/rate_limit.py`
++  - Deterministic fixed-window RPS limiters for `public` and `admin` scopes.
++- `src/hitech_forms/services/webhooks/` (new package)
++  - `payloads.py`: canonical payload + hashing/idempotency key.
++  - `scheduler.py`: deterministic retry/backoff (+ optional deterministic jitter).
++  - `outbox_service.py`: enqueue + status transitions.
++  - `worker.py`: run-once/run-loop delivery executor.
++  - `http_client.py`: lightweight webhook POST transport.
++- `src/hitech_forms/db/models/`
++  - Add `webhook_outbox.py`, `webhook_delivery_log.py`.
++- `src/hitech_forms/db/repositories/` (new)
++  - `webhook_outbox_repository.py`: DB persistence, claim/lock, delivery logs.
++- `src/hitech_forms/api/routers/`
++  - Extend `health.py` for `/api/health` + `/api/health/db`.
++  - Add `metrics.py` router (feature-flag gated).
++- `src/hitech_forms/ops/cli.py`
++  - Add `webhooks run-once`, `webhooks run-loop`.
++  - Add deterministic demo/evidence commands.
++
++## Flags and Config (defaults)
++- `HFORMS_FEATURE_WEBHOOKS_OUTBOX=false`
++- `HFORMS_FEATURE_RATE_LIMIT=false`
++- `HFORMS_FEATURE_METRICS=false`
++- `HFORMS_WEBHOOK_MAX_ATTEMPTS=8`
++- `HFORMS_WEBHOOK_BASE_BACKOFF_SECONDS=5`
++- `HFORMS_WEBHOOK_JITTER=0`
++- `HFORMS_RATE_LIMIT_RPS_PUBLIC=0`
++- `HFORMS_RATE_LIMIT_RPS_ADMIN=0`
++
++## Migration Plan
++- Add a new Alembic revision after `0002_submission_seq` to create:
++  - `webhook_outbox`
++  - `webhook_delivery_log`
++- Include indexes for deterministic work pickup (`status`, `next_attempt_at`, `id`) and FK linkage.
++
++## Test Plan
++- Unit: canonical payload/hash, retry schedule, deterministic jitter, idempotent enqueue, rate-limit boundaries.
++- Integration: enqueue on submit (flag ON), worker delivery lifecycle, migration reflection includes new tables.
++- E2E smoke: create -> publish -> submit -> export, health endpoints, and optional metrics check when enabled.
++
++## Ops/Gates
++- Validate with:
++  - `python -m hitech_forms.ops.cli db upgrade`
++  - `python -m hitech_forms.ops.cli quality-check`
++  - `pytest -q`
++  - `pytest -q tests/e2e -k smoke`
++- Produce required final report and bundle artifacts under `tools/codex/BUNDLES/BLOCK_WEBHOOKS_OBS/`.
+diff --git a/docs/dev/FINAL_REPORT_BLOCK_WEBHOOKS_OBS.md b/docs/dev/FINAL_REPORT_BLOCK_WEBHOOKS_OBS.md
+new file mode 100644
+index 0000000..7592048
+--- /dev/null
++++ b/docs/dev/FINAL_REPORT_BLOCK_WEBHOOKS_OBS.md
+@@ -0,0 +1,129 @@
++# FINAL REPORT: BLOCK_WEBHOOKS_OBS
++
++## 1) Summary of what was built
++- Added industrial webhook outbox subsystem (schema, repo, service, worker, delivery logs, retries/backoff, idempotency, structured event logs) behind `HFORMS_FEATURE_WEBHOOKS_OUTBOX` (default OFF).
++- Added deterministic, flag-gated in-memory rate limiting for admin and public submission endpoints using RPS controls.
++- Added observability upgrades: correlation IDs, structured logs with request context/startup seed, split health endpoints (`/api/health`, `/api/health/db`), and minimal feature-gated metrics endpoint (`/api/metrics`).
++- Added deterministic demo tooling (`demo run`) that executes create->publish->submit->export and writes evidence artifacts in run folders.
++- Added extensive deterministic tests for webhook payload/hash, retry scheduling, idempotency, worker lifecycle (success/retry/fail), concurrency safety, rate limits, observability, migrations, and e2e smoke flow.
++
++## 2) Feature flags added + default values
++- `HFORMS_FEATURE_WEBHOOKS_OUTBOX=false`
++- `HFORMS_FEATURE_RATE_LIMIT=false`
++- `HFORMS_FEATURE_METRICS=false`
++- `HFORMS_WEBHOOK_MAX_ATTEMPTS=8`
++- `HFORMS_WEBHOOK_BASE_BACKOFF_SECONDS=5`
++- `HFORMS_WEBHOOK_JITTER=0`
++- `HFORMS_RATE_LIMIT_RPS_PUBLIC=0`
++- `HFORMS_RATE_LIMIT_RPS_ADMIN=0`
++
++Additional related config used by implementation:
++- `HFORMS_WEBHOOK_TARGET_URL=` (empty = not configured/no enqueue)
++
++## 3) DB schema changes + migration name
++- New migration: `migrations/versions/0003_webhook_outbox.py`
++- Added table `webhook_outbox`:
++  - `id, created_at, next_attempt_at, attempt_count, status, target_url, payload_json, payload_sha256, idempotency_key, form_id, form_version_id, submission_id, last_error, delivered_at`
++  - Unique idempotency key and polling indexes.
++- Added table `webhook_delivery_log`:
++  - `id, outbox_id, attempt_no, attempted_at, http_status, response_snippet, error_type, error_message`
++  - FK to outbox, per-attempt uniqueness/indexes.
++
++## 4) How to run
++- DB upgrade:
++  - `python -m hitech_forms.ops.cli db upgrade`
++- Webhook worker:
++  - Run once: `python -m hitech_forms.ops.cli webhooks run-once --limit 50`
++  - Run loop: `python -m hitech_forms.ops.cli webhooks run-loop --interval 5 --limit 50`
++- Demo evidence run:
++  - `python -m hitech_forms.ops.cli demo run --output-root var/demo_runs --submissions 10`
++  - Optional: `--run-webhooks true`
++  - Optional timestamp folder: `--with-timestamp true`
++
++## 5) Test results (commands + pass/fail)
++Executed from repo root:
++- `python -m hitech_forms.ops.cli db upgrade`
++  - Fail on pre-existing default DB (`var/hitech_forms.db`) due prior inconsistent state (`no such table: submissions`).
++- `HFORMS_DB_PATH=var/validate_upgrade_20260224.db python -m hitech_forms.ops.cli db upgrade`
++  - Pass (fresh DB, upgraded through `0003_webhook_outbox`).
++- `python -m hitech_forms.ops.cli quality-check`
++  - Pass.
++- `pytest -q`
++  - Pass (`31 passed`).
++- `pytest -q tests/e2e -k smoke`
++  - Pass (`2 passed`).
++- Additional CI wave checks:
++  - `python -m hitech_forms.ops.ci determinism-check` Pass
++  - `python -m hitech_forms.ops.ci lint` Pass
++  - `python -m hitech_forms.ops.ci typecheck` Pass
++  - `python -m hitech_forms.ops.ci start-smoke` Pass
++  - `python -m hitech_forms.ops.ci e2e --flows smoke` Pass
++
++## 6) Files created/modified (explicit list)
++Modified:
++- `.env.example`
++- `README.md`
++- `docs/API.md`
++- `docs/KERNEL_CONTEXT.md`
++- `src/hitech_forms/api/router.py`
++- `src/hitech_forms/api/routers/__init__.py`
++- `src/hitech_forms/api/routers/health.py`
++- `src/hitech_forms/api/routers/public_forms.py`
++- `src/hitech_forms/app/dependencies.py`
++- `src/hitech_forms/app/lifespan.py`
++- `src/hitech_forms/app/main.py`
++- `src/hitech_forms/app/security/rate_limit.py`
++- `src/hitech_forms/db/models/__init__.py`
++- `src/hitech_forms/db/repositories/__init__.py`
++- `src/hitech_forms/db/repositories/submission_repository.py`
++- `src/hitech_forms/ops/cli.py`
++- `src/hitech_forms/platform/__init__.py`
++- `src/hitech_forms/platform/feature_flags.py`
++- `src/hitech_forms/platform/logging.py`
++- `src/hitech_forms/platform/settings.py`
++- `src/hitech_forms/services/__init__.py`
++- `src/hitech_forms/services/submission_service.py`
++- `src/hitech_forms/web/routers/public_forms.py`
++- `tests/conftest.py`
++- `tests/e2e/test_smoke_health.py`
++- `tests/integration/test_form_lifecycle.py`
++- `tests/integration/test_migrations.py`
++- `tests/integration/test_submission_invariants.py`
++
++Created:
++- `docs/dev/BLOCK_WEBHOOKS_OBS_PLAN.md`
++- `migrations/versions/0003_webhook_outbox.py`
++- `src/hitech_forms/api/routers/metrics.py`
++- `src/hitech_forms/app/middleware/__init__.py`
++- `src/hitech_forms/app/middleware/request_context.py`
++- `src/hitech_forms/db/models/webhook_delivery_log.py`
++- `src/hitech_forms/db/models/webhook_outbox.py`
++- `src/hitech_forms/db/repositories/webhook_outbox_repository.py`
++- `src/hitech_forms/ops/demo.py`
++- `src/hitech_forms/ops/webhooks.py`
++- `src/hitech_forms/platform/metrics.py`
++- `src/hitech_forms/platform/request_context.py`
++- `src/hitech_forms/services/webhooks/__init__.py`
++- `src/hitech_forms/services/webhooks/http_client.py`
++- `src/hitech_forms/services/webhooks/outbox_service.py`
++- `src/hitech_forms/services/webhooks/payloads.py`
++- `src/hitech_forms/services/webhooks/scheduler.py`
++- `src/hitech_forms/services/webhooks/worker.py`
++- `tests/e2e/test_smoke_flow.py`
++- `tests/integration/test_demo_tooling.py`
++- `tests/integration/test_observability.py`
++- `tests/integration/test_rate_limit_flags.py`
++- `tests/integration/test_webhook_outbox.py`
++- `tests/unit/test_webhooks_determinism.py`
++
++## 7) Notes on determinism + remaining tech debt
++- Determinism maintained:
++  - canonical JSON for payloads/responses/summary artifacts
++  - deterministic idempotency key/hash
++  - deterministic retry schedule; jitter disabled by default and deterministic when enabled
++  - deterministic request ID generation when header absent (seed + counter + method/path hash)
++  - tests rely on `PYTHONHASHSEED=0`, UTC, and fixed epoch fixtures.
++- Remaining technical debt / follow-up:
++  - In-memory rate limiting is per-process (expected for current scope).
++  - Worker is in-process CLI (intentionally simple); production should run it as dedicated process.
++  - Existing default local DB file may be left in partial migrated state by prior runs; fresh DB upgrade is clean.
+diff --git a/migrations/versions/0003_webhook_outbox.py b/migrations/versions/0003_webhook_outbox.py
+new file mode 100644
+index 0000000..8bd2baa
+--- /dev/null
++++ b/migrations/versions/0003_webhook_outbox.py
+@@ -0,0 +1,96 @@
++"""0003_webhook_outbox
++
++Revision ID: 0003_webhook_outbox
++Revises: 0002_submission_seq
++Create Date: 2026-02-24
++"""
++
++from __future__ import annotations
++
++import sqlalchemy as sa
++from alembic import op
++
++revision = "0003_webhook_outbox"
++down_revision = "0002_submission_seq"
++branch_labels = None
++depends_on = None
++
++
++def upgrade() -> None:
++    op.create_table(
++        "webhook_outbox",
++        sa.Column("id", sa.Integer(), primary_key=True),
++        sa.Column("created_at", sa.Integer(), nullable=False, server_default="0"),
++        sa.Column("next_attempt_at", sa.Integer(), nullable=False, server_default="0"),
++        sa.Column("attempt_count", sa.Integer(), nullable=False, server_default="0"),
++        sa.Column("status", sa.String(length=20), nullable=False, server_default="PENDING"),
++        sa.Column("target_url", sa.String(length=1000), nullable=False),
++        sa.Column("payload_json", sa.Text(), nullable=False),
++        sa.Column("payload_sha256", sa.String(length=64), nullable=False),
++        sa.Column("idempotency_key", sa.String(length=128), nullable=False),
++        sa.Column("form_id", sa.Integer(), sa.ForeignKey("forms.id", ondelete="CASCADE"), nullable=False),
++        sa.Column(
++            "form_version_id",
++            sa.Integer(),
++            sa.ForeignKey("form_versions.id", ondelete="CASCADE"),
++            nullable=False,
++        ),
++        sa.Column(
++            "submission_id",
++            sa.Integer(),
++            sa.ForeignKey("submissions.id", ondelete="CASCADE"),
++            nullable=False,
++        ),
++        sa.Column("last_error", sa.Text(), nullable=True),
++        sa.Column("delivered_at", sa.Integer(), nullable=True),
++        sa.UniqueConstraint("idempotency_key", name="uq_webhook_outbox_idempotency_key"),
++    )
++    op.create_index(
++        "ix_webhook_outbox_status_next_attempt_id",
++        "webhook_outbox",
++        ["status", "next_attempt_at", "id"],
++        unique=False,
++    )
++    op.create_index("ix_webhook_outbox_submission_id", "webhook_outbox", ["submission_id"], unique=False)
++    op.create_index("ix_webhook_outbox_created_at", "webhook_outbox", ["created_at"], unique=False)
++
++    op.create_table(
++        "webhook_delivery_log",
++        sa.Column("id", sa.Integer(), primary_key=True),
++        sa.Column(
++            "outbox_id",
++            sa.Integer(),
++            sa.ForeignKey("webhook_outbox.id", ondelete="CASCADE"),
++            nullable=False,
++        ),
++        sa.Column("attempt_no", sa.Integer(), nullable=False, server_default="0"),
++        sa.Column("attempted_at", sa.Integer(), nullable=False, server_default="0"),
++        sa.Column("http_status", sa.Integer(), nullable=True),
++        sa.Column("response_snippet", sa.Text(), nullable=False, server_default=""),
++        sa.Column("error_type", sa.String(length=120), nullable=True),
++        sa.Column("error_message", sa.Text(), nullable=True),
++        sa.UniqueConstraint("outbox_id", "attempt_no", name="uq_webhook_delivery_log_attempt"),
++    )
++    op.create_index(
++        "ix_webhook_delivery_log_outbox_id",
++        "webhook_delivery_log",
++        ["outbox_id"],
++        unique=False,
++    )
++    op.create_index(
++        "ix_webhook_delivery_log_attempted_at",
++        "webhook_delivery_log",
++        ["attempted_at"],
++        unique=False,
++    )
++
++
++def downgrade() -> None:
++    op.drop_index("ix_webhook_delivery_log_attempted_at", table_name="webhook_delivery_log")
++    op.drop_index("ix_webhook_delivery_log_outbox_id", table_name="webhook_delivery_log")
++    op.drop_table("webhook_delivery_log")
++
++    op.drop_index("ix_webhook_outbox_created_at", table_name="webhook_outbox")
++    op.drop_index("ix_webhook_outbox_submission_id", table_name="webhook_outbox")
++    op.drop_index("ix_webhook_outbox_status_next_attempt_id", table_name="webhook_outbox")
++    op.drop_table("webhook_outbox")
+diff --git a/src/hitech_forms/api/routers/metrics.py b/src/hitech_forms/api/routers/metrics.py
+new file mode 100644
+index 0000000..d03941d
+--- /dev/null
++++ b/src/hitech_forms/api/routers/metrics.py
+@@ -0,0 +1,35 @@
++from __future__ import annotations
++
++from fastapi import APIRouter, Depends, Response
++from sqlalchemy.orm import Session
++
++from hitech_forms.db import get_session
++from hitech_forms.db.repositories import WebhookOutboxRepository
++from hitech_forms.platform.errors import not_found
++from hitech_forms.platform.metrics import (
++    increment_counter,
++    render_text_metrics,
++    set_gauge,
++    snapshot_metrics,
++)
++from hitech_forms.platform.settings import get_settings
++
++
++def build_metrics_router() -> APIRouter:
++    router = APIRouter()
++
++    @router.get("/metrics")
++    def metrics(session: Session = Depends(get_session)):
++        settings = get_settings()
++        if not settings.feature_metrics:
++            raise not_found("metrics endpoint is disabled")
++
++        pending = WebhookOutboxRepository(session).count_pending()
++        increment_counter("submissions_total", 0)
++        increment_counter("webhook_delivered_total", 0)
++        increment_counter("webhook_failed_total", 0)
++        set_gauge("webhook_outbox_pending", pending)
++        payload = render_text_metrics(snapshot_metrics())
++        return Response(content=payload, media_type="text/plain; charset=utf-8", status_code=200)
++
++    return router
+diff --git a/src/hitech_forms/app/middleware/__init__.py b/src/hitech_forms/app/middleware/__init__.py
+new file mode 100644
+index 0000000..df016cc
+--- /dev/null
++++ b/src/hitech_forms/app/middleware/__init__.py
+@@ -0,0 +1,6 @@
++from hitech_forms.app.middleware.request_context import (
++    REQUEST_ID_HEADER,
++    request_context_middleware,
++)
++
++__all__ = ["request_context_middleware", "REQUEST_ID_HEADER"]
+diff --git a/src/hitech_forms/app/middleware/request_context.py b/src/hitech_forms/app/middleware/request_context.py
+new file mode 100644
+index 0000000..9f256fa
+--- /dev/null
++++ b/src/hitech_forms/app/middleware/request_context.py
+@@ -0,0 +1,25 @@
++from __future__ import annotations
++
++from fastapi import Request
++
++from hitech_forms.platform.request_context import (
++    bind_request_id,
++    build_deterministic_request_id,
++    reset_request_id,
++    sanitize_request_id,
++)
++
++REQUEST_ID_HEADER = "X-Request-Id"
++
++
++async def request_context_middleware(request: Request, call_next):
++    incoming = sanitize_request_id(request.headers.get(REQUEST_ID_HEADER, ""))
++    request_id = incoming or build_deterministic_request_id(request.method, request.url.path)
++    token = bind_request_id(request_id)
++    request.state.request_id = request_id
++    try:
++        response = await call_next(request)
++    finally:
++        reset_request_id(token)
++    response.headers[REQUEST_ID_HEADER] = request_id
++    return response
+diff --git a/src/hitech_forms/db/models/webhook_delivery_log.py b/src/hitech_forms/db/models/webhook_delivery_log.py
+new file mode 100644
+index 0000000..e28f34e
+--- /dev/null
++++ b/src/hitech_forms/db/models/webhook_delivery_log.py
+@@ -0,0 +1,29 @@
++from __future__ import annotations
++
++from sqlalchemy import ForeignKey, Index, Integer, String, Text, UniqueConstraint
++from sqlalchemy.orm import Mapped, mapped_column, relationship
++
++from hitech_forms.db.models.base import Base
++
++
++class WebhookDeliveryLog(Base):
++    __tablename__ = "webhook_delivery_log"
++    __table_args__ = (
++        UniqueConstraint("outbox_id", "attempt_no", name="uq_webhook_delivery_log_attempt"),
++        Index("ix_webhook_delivery_log_outbox_id", "outbox_id"),
++        Index("ix_webhook_delivery_log_attempted_at", "attempted_at"),
++    )
++
++    id: Mapped[int] = mapped_column(Integer, primary_key=True)
++    outbox_id: Mapped[int] = mapped_column(
++        ForeignKey("webhook_outbox.id", ondelete="CASCADE"),
++        nullable=False,
++    )
++    attempt_no: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
++    attempted_at: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
++    http_status: Mapped[int | None] = mapped_column(Integer, nullable=True)
++    response_snippet: Mapped[str] = mapped_column(Text, nullable=False, default="")
++    error_type: Mapped[str | None] = mapped_column(String(120), nullable=True)
++    error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
++
++    outbox = relationship("WebhookOutbox", back_populates="delivery_logs")
+diff --git a/src/hitech_forms/db/models/webhook_outbox.py b/src/hitech_forms/db/models/webhook_outbox.py
+new file mode 100644
+index 0000000..d76d538
+--- /dev/null
++++ b/src/hitech_forms/db/models/webhook_outbox.py
+@@ -0,0 +1,39 @@
++from __future__ import annotations
++
++from sqlalchemy import ForeignKey, Index, Integer, String, Text, UniqueConstraint
++from sqlalchemy.orm import Mapped, mapped_column, relationship
++
++from hitech_forms.db.models.base import Base
++
++
++class WebhookOutbox(Base):
++    __tablename__ = "webhook_outbox"
++    __table_args__ = (
++        UniqueConstraint("idempotency_key", name="uq_webhook_outbox_idempotency_key"),
++        Index("ix_webhook_outbox_status_next_attempt_id", "status", "next_attempt_at", "id"),
++        Index("ix_webhook_outbox_submission_id", "submission_id"),
++        Index("ix_webhook_outbox_created_at", "created_at"),
++    )
++
++    id: Mapped[int] = mapped_column(Integer, primary_key=True)
++    created_at: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
++    next_attempt_at: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
++    attempt_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
++    status: Mapped[str] = mapped_column(String(20), nullable=False, default="PENDING")
++    target_url: Mapped[str] = mapped_column(String(1000), nullable=False)
++    payload_json: Mapped[str] = mapped_column(Text, nullable=False)
++    payload_sha256: Mapped[str] = mapped_column(String(64), nullable=False)
++    idempotency_key: Mapped[str] = mapped_column(String(128), nullable=False)
++    form_id: Mapped[int] = mapped_column(ForeignKey("forms.id", ondelete="CASCADE"), nullable=False)
++    form_version_id: Mapped[int] = mapped_column(
++        ForeignKey("form_versions.id", ondelete="CASCADE"), nullable=False
++    )
++    submission_id: Mapped[int] = mapped_column(ForeignKey("submissions.id", ondelete="CASCADE"), nullable=False)
++    last_error: Mapped[str | None] = mapped_column(Text, nullable=True)
++    delivered_at: Mapped[int | None] = mapped_column(Integer, nullable=True)
++
++    delivery_logs = relationship(
++        "WebhookDeliveryLog",
++        back_populates="outbox",
++        cascade="all, delete-orphan",
++    )
+diff --git a/src/hitech_forms/db/repositories/webhook_outbox_repository.py b/src/hitech_forms/db/repositories/webhook_outbox_repository.py
+new file mode 100644
+index 0000000..318622f
+--- /dev/null
++++ b/src/hitech_forms/db/repositories/webhook_outbox_repository.py
+@@ -0,0 +1,138 @@
++from __future__ import annotations
++
++from sqlalchemy import func, select, update
++from sqlalchemy.orm import Session
++
++from hitech_forms.db.models import WebhookDeliveryLog, WebhookOutbox
++
++PENDING = "PENDING"
++IN_FLIGHT = "IN_FLIGHT"
++DELIVERED = "DELIVERED"
++FAILED = "FAILED"
++
++
++class WebhookOutboxRepository:
++    def __init__(self, session: Session):
++        self._session = session
++
++    def get_by_idempotency_key(self, idempotency_key: str) -> WebhookOutbox | None:
++        stmt = select(WebhookOutbox).where(WebhookOutbox.idempotency_key == idempotency_key).limit(1)
++        return self._session.execute(stmt).scalars().first()
++
++    def create_outbox(
++        self,
++        *,
++        created_at: int,
++        next_attempt_at: int,
++        target_url: str,
++        payload_json: str,
++        payload_sha256: str,
++        idempotency_key: str,
++        form_id: int,
++        form_version_id: int,
++        submission_id: int,
++    ) -> WebhookOutbox:
++        row = WebhookOutbox(
++            created_at=created_at,
++            next_attempt_at=next_attempt_at,
++            attempt_count=0,
++            status=PENDING,
++            target_url=target_url,
++            payload_json=payload_json,
++            payload_sha256=payload_sha256,
++            idempotency_key=idempotency_key,
++            form_id=form_id,
++            form_version_id=form_version_id,
++            submission_id=submission_id,
++            last_error=None,
++            delivered_at=None,
++        )
++        self._session.add(row)
++        self._session.flush()
++        return row
++
++    def count_pending(self) -> int:
++        stmt = select(func.count(WebhookOutbox.id)).where(WebhookOutbox.status == PENDING)
++        total = self._session.execute(stmt).scalar_one()
++        return int(total)
++
++    def claim_next_eligible(self, *, now_epoch: int) -> WebhookOutbox | None:
++        for _ in range(8):
++            candidate_id = self._session.execute(
++                select(WebhookOutbox.id)
++                .where(
++                    WebhookOutbox.status == PENDING,
++                    WebhookOutbox.next_attempt_at <= now_epoch,
++                )
++                .order_by(WebhookOutbox.next_attempt_at.asc(), WebhookOutbox.id.asc())
++                .limit(1)
++            ).scalar_one_or_none()
++            if candidate_id is None:
++                return None
++
++            claimed = self._session.execute(
++                update(WebhookOutbox)
++                .where(
++                    WebhookOutbox.id == int(candidate_id),
++                    WebhookOutbox.status == PENDING,
++                    WebhookOutbox.next_attempt_at <= now_epoch,
++                )
++                .values(status=IN_FLIGHT)
++            )
++            if int(getattr(claimed, "rowcount", 0)) == 1:
++                self._session.flush()
++                row = self._session.get(WebhookOutbox, int(candidate_id))
++                if row is not None:
++                    return row
++        return None
++
++    def append_delivery_log(
++        self,
++        *,
++        outbox_id: int,
++        attempt_no: int,
++        attempted_at: int,
++        http_status: int | None,
++        response_snippet: str,
++        error_type: str | None,
++        error_message: str | None,
++    ) -> WebhookDeliveryLog:
++        row = WebhookDeliveryLog(
++            outbox_id=outbox_id,
++            attempt_no=attempt_no,
++            attempted_at=attempted_at,
++            http_status=http_status,
++            response_snippet=response_snippet,
++            error_type=error_type,
++            error_message=error_message,
++        )
++        self._session.add(row)
++        self._session.flush()
++        return row
++
++    def mark_delivered(self, *, row: WebhookOutbox, delivered_at: int, attempt_count: int) -> None:
++        row.status = DELIVERED
++        row.attempt_count = attempt_count
++        row.delivered_at = delivered_at
++        row.last_error = None
++        self._session.flush()
++
++    def mark_retry(
++        self,
++        *,
++        row: WebhookOutbox,
++        attempt_count: int,
++        next_attempt_at: int,
++        last_error: str,
++    ) -> None:
++        row.status = PENDING
++        row.attempt_count = attempt_count
++        row.next_attempt_at = next_attempt_at
++        row.last_error = last_error
++        self._session.flush()
++
++    def mark_failed(self, *, row: WebhookOutbox, attempt_count: int, last_error: str) -> None:
++        row.status = FAILED
++        row.attempt_count = attempt_count
++        row.last_error = last_error
++        self._session.flush()
+diff --git a/src/hitech_forms/ops/demo.py b/src/hitech_forms/ops/demo.py
+new file mode 100644
+index 0000000..3eb45a4
+--- /dev/null
++++ b/src/hitech_forms/ops/demo.py
+@@ -0,0 +1,176 @@
++from __future__ import annotations
++
++import os
++import re
++from pathlib import Path
++from typing import Any
++
++from hitech_forms.db import session_scope
++from hitech_forms.db.repositories import (
++    FormRepository,
++    SubmissionRepository,
++    WebhookOutboxRepository,
++)
++from hitech_forms.platform.determinism import canonical_json_dumps, utc_now_epoch
++from hitech_forms.platform.settings import get_settings
++from hitech_forms.services import (
++    ExportService,
++    FormService,
++    SubmissionService,
++    WebhookOutboxService,
++)
++from hitech_forms.services.webhooks import WebhookWorker
++
++RUN_DIR_PATTERN = re.compile(r"^run-(\d{4})$")
++
++
++def _ensure_dir(path: Path) -> Path:
++    path.mkdir(parents=True, exist_ok=True)
++    return path
++
++
++def _next_run_name(root: Path) -> str:
++    existing: list[int] = []
++    if root.exists():
++        for child in root.iterdir():
++            if not child.is_dir():
++                continue
++            match = RUN_DIR_PATTERN.match(child.name)
++            if match:
++                existing.append(int(match.group(1)))
++    next_id = (max(existing) if existing else 0) + 1
++    return f"run-{next_id:04d}"
++
++
++def _write_canonical_json(path: Path, payload: dict[str, Any]) -> None:
++    path.write_text(canonical_json_dumps(payload) + "\n", encoding="utf-8")
++
++
++def _redacted_env_snapshot() -> str:
++    deny_tokens = ("TOKEN", "SECRET", "PASSWORD", "KEY")
++    lines: list[str] = []
++    for key in sorted(os.environ):
++        if not (key.startswith("HFORMS_") or key == "PYTHONHASHSEED"):
++            continue
++        value = os.environ.get(key, "")
++        redacted = "***REDACTED***" if any(part in key for part in deny_tokens) else value
++        lines.append(f"{key}={redacted}")
++    return "\n".join(lines) + ("\n" if lines else "")
++
++
++def _append_log(path: Path, event: str, **fields: Any) -> None:
++    payload = {"event": event, "ts": utc_now_epoch(), **fields}
++    with path.open("a", encoding="utf-8") as handle:
++        handle.write(canonical_json_dumps(payload))
++        handle.write("\n")
++
++
++def run_demo_evidence(
++    *,
++    output_root: str = "var/demo_runs",
++    submissions: int = 5,
++    run_id: str | None = None,
++    with_timestamp: bool = False,
++    run_webhooks: bool = False,
++) -> dict[str, Any]:
++    settings = get_settings()
++    root = _ensure_dir(Path(output_root))
++    if run_id:
++        run_name = run_id
++    elif with_timestamp:
++        run_name = f"run-ts-{utc_now_epoch()}"
++    else:
++        run_name = _next_run_name(root)
++
++    run_dir = _ensure_dir(root / run_name)
++    logs_dir = _ensure_dir(run_dir / "logs")
++    events_log = logs_dir / "events.jsonl"
++    csv_path = run_dir / "exported.csv"
++    summary_path = run_dir / "summary.json"
++    env_path = run_dir / "env_snapshot.txt"
++
++    _append_log(events_log, "demo_start", run_id=run_name, output_root=str(root))
++
++    created_form: dict[str, Any]
++    submitted_ids: list[int] = []
++    with session_scope() as session:
++        form_repo = FormRepository(session)
++        submission_repo = SubmissionRepository(session)
++        webhook_repo = WebhookOutboxRepository(session)
++        webhook_service = WebhookOutboxService(webhook_repo, settings)
++
++        form_service = FormService(form_repo)
++        submission_service = SubmissionService(form_repo, submission_repo, webhook_outbox_service=webhook_service)
++
++        created_form = form_service.command_create_form(title="Investor Demo Intake", slug="investor-demo-intake")
++        _append_log(events_log, "demo_form_created", form_id=created_form["id"], slug=created_form["slug"])
++        form_service.command_replace_fields(
++            form_id=created_form["id"],
++            fields=[
++                {"key": "name", "label": "Name", "type": "text", "required": True, "options": []},
++                {"key": "email", "label": "Email", "type": "email", "required": True, "options": []},
++                {
++                    "key": "priority",
++                    "label": "Priority",
++                    "type": "select",
++                    "required": True,
++                    "options": ["low", "normal", "high"],
++                },
++                {"key": "notify", "label": "Notify", "type": "checkbox", "required": False, "options": []},
++            ],
++        )
++        published = form_service.command_publish_form(created_form["id"])
++        _append_log(events_log, "demo_form_published", form_id=published["id"], slug=published["slug"])
++
++        priorities = ("low", "normal", "high")
++        for idx in range(max(0, submissions)):
++            payload = {
++                "name": f"Demo User {idx:03d}",
++                "email": f"demo{idx:03d}@example.com",
++                "priority": priorities[idx % len(priorities)],
++                "notify": "true" if idx % 2 == 0 else "false",
++            }
++            submission = submission_service.command_submit_public(slug=published["slug"], values=payload)
++            submitted_ids.append(int(submission["id"]))
++            _append_log(
++                events_log,
++                "demo_submission_created",
++                submission_id=submission["id"],
++                submission_seq=submission["submission_seq"],
++            )
++
++    with session_scope() as session:
++        export_service = ExportService(FormRepository(session), SubmissionRepository(session))
++        with csv_path.open("w", encoding="utf-8", newline="") as handle:
++            for chunk in export_service.stream_form_csv(form_id=int(created_form["id"]), export_version="v1"):
++                handle.write(chunk)
++    _append_log(events_log, "demo_export_written", csv=str(csv_path))
++
++    webhook_summary: dict[str, int] | None = None
++    if run_webhooks:
++        worker = WebhookWorker(settings=settings)
++        result = worker.run_once(limit=max(1, submissions * settings.webhook_max_attempts))
++        webhook_summary = {
++            "processed": result.processed,
++            "delivered": result.delivered,
++            "retried": result.retried,
++            "failed": result.failed,
++        }
++        _append_log(events_log, "demo_webhook_worker_run", **webhook_summary)
++
++    env_path.write_text(_redacted_env_snapshot(), encoding="utf-8")
++    summary = {
++        "run_id": run_name,
++        "run_dir": str(run_dir),
++        "form_id": int(created_form["id"]),
++        "form_slug": str(created_form["slug"]),
++        "submissions_requested": int(submissions),
++        "submissions_created": len(submitted_ids),
++        "submission_ids": submitted_ids,
++        "exported_csv": str(csv_path),
++        "logs_dir": str(logs_dir),
++        "webhook_worker": webhook_summary,
++    }
++    _write_canonical_json(summary_path, summary)
++    _append_log(events_log, "demo_complete", summary_path=str(summary_path))
++    return summary
+diff --git a/src/hitech_forms/ops/webhooks.py b/src/hitech_forms/ops/webhooks.py
+new file mode 100644
+index 0000000..dc22b11
+--- /dev/null
++++ b/src/hitech_forms/ops/webhooks.py
+@@ -0,0 +1,20 @@
++from __future__ import annotations
++
++from hitech_forms.platform.settings import get_settings
++from hitech_forms.services.webhooks import WebhookWorker
++
++
++def webhooks_run_once(*, limit: int = 50) -> dict[str, int]:
++    worker = WebhookWorker(settings=get_settings())
++    summary = worker.run_once(limit=limit)
++    return {
++        "processed": summary.processed,
++        "delivered": summary.delivered,
++        "retried": summary.retried,
++        "failed": summary.failed,
++    }
++
++
++def webhooks_run_loop(*, interval_seconds: int = 5, limit: int = 50) -> None:
++    worker = WebhookWorker(settings=get_settings())
++    worker.run_loop(interval_seconds=interval_seconds, limit=limit)
+diff --git a/src/hitech_forms/platform/metrics.py b/src/hitech_forms/platform/metrics.py
+new file mode 100644
+index 0000000..3fa8c38
+--- /dev/null
++++ b/src/hitech_forms/platform/metrics.py
+@@ -0,0 +1,37 @@
++from __future__ import annotations
++
++from collections import defaultdict
++from threading import Lock
++
++_METRICS_LOCK = Lock()
++_COUNTERS: dict[str, int] = defaultdict(int)
++_GAUGES: dict[str, int] = {}
++
++
++def increment_counter(name: str, amount: int = 1) -> None:
++    with _METRICS_LOCK:
++        _COUNTERS[name] = int(_COUNTERS.get(name, 0)) + int(amount)
++
++
++def set_gauge(name: str, value: int) -> None:
++    with _METRICS_LOCK:
++        _GAUGES[name] = int(value)
++
++
++def snapshot_metrics() -> dict[str, int]:
++    with _METRICS_LOCK:
++        merged: dict[str, int] = {}
++        merged.update(_COUNTERS)
++        merged.update(_GAUGES)
++    return {key: merged[key] for key in sorted(merged)}
++
++
++def reset_metrics() -> None:
++    with _METRICS_LOCK:
++        _COUNTERS.clear()
++        _GAUGES.clear()
++
++
++def render_text_metrics(metrics: dict[str, int]) -> str:
++    lines = [f"{key} {metrics[key]}" for key in sorted(metrics)]
++    return "\n".join(lines) + ("\n" if lines else "")
+diff --git a/src/hitech_forms/platform/request_context.py b/src/hitech_forms/platform/request_context.py
+new file mode 100644
+index 0000000..54c0fb8
+--- /dev/null
++++ b/src/hitech_forms/platform/request_context.py
+@@ -0,0 +1,52 @@
++from __future__ import annotations
++
++import hashlib
++from contextvars import ContextVar, Token
++from threading import Lock
++
++_REQUEST_ID: ContextVar[str] = ContextVar("hforms_request_id", default="")
++_COUNTER_LOCK = Lock()
++_REQUEST_COUNTER = 0
++_STARTUP_SEED = "seed0000"
++
++
++def set_startup_seed(seed: str) -> None:
++    global _STARTUP_SEED
++    _STARTUP_SEED = seed[:24] or "seed0000"
++
++
++def get_startup_seed() -> str:
++    return _STARTUP_SEED
++
++
++def sanitize_request_id(value: str) -> str:
++    cleaned = "".join(ch for ch in value.strip() if ch.isalnum() or ch in {"-", "_", "."})
++    return cleaned[:120]
++
++
++def build_deterministic_request_id(method: str, path: str) -> str:
++    global _REQUEST_COUNTER
++    with _COUNTER_LOCK:
++        _REQUEST_COUNTER += 1
++        count = _REQUEST_COUNTER
++    route_hash = hashlib.sha256(f"{method}:{path}".encode()).hexdigest()[:8]
++    return f"{_STARTUP_SEED}-{count:08d}-{route_hash}"
++
++
++def bind_request_id(request_id: str) -> Token[str]:
++    return _REQUEST_ID.set(request_id)
++
++
++def reset_request_id(token: Token[str]) -> None:
++    _REQUEST_ID.reset(token)
++
++
++def get_request_id() -> str | None:
++    value = _REQUEST_ID.get()
++    return value or None
++
++
++def reset_request_context() -> None:
++    global _REQUEST_COUNTER
++    with _COUNTER_LOCK:
++        _REQUEST_COUNTER = 0
+diff --git a/src/hitech_forms/services/webhooks/__init__.py b/src/hitech_forms/services/webhooks/__init__.py
+new file mode 100644
+index 0000000..5e79185
+--- /dev/null
++++ b/src/hitech_forms/services/webhooks/__init__.py
+@@ -0,0 +1,4 @@
++from hitech_forms.services.webhooks.outbox_service import WebhookEnqueueResult, WebhookOutboxService
++from hitech_forms.services.webhooks.worker import WebhookWorker, WebhookWorkerSummary
++
++__all__ = ["WebhookOutboxService", "WebhookEnqueueResult", "WebhookWorker", "WebhookWorkerSummary"]
+diff --git a/src/hitech_forms/services/webhooks/http_client.py b/src/hitech_forms/services/webhooks/http_client.py
+new file mode 100644
+index 0000000..277149d
+--- /dev/null
++++ b/src/hitech_forms/services/webhooks/http_client.py
+@@ -0,0 +1,70 @@
++from __future__ import annotations
++
++from dataclasses import dataclass
++from urllib import error, request
++
++
++@dataclass(frozen=True)
++class WebhookDeliveryResult:
++    delivered: bool
++    http_status: int | None
++    response_snippet: str
++    error_type: str | None
++    error_message: str | None
++
++
++def _normalize_snippet(raw: str) -> str:
++    return " ".join(raw.replace("\r", " ").replace("\n", " ").split())[:300]
++
++
++class WebhookHttpClient:
++    def __init__(self, timeout_seconds: float = 5.0):
++        self._timeout_seconds = timeout_seconds
++
++    def deliver(self, *, target_url: str, payload_json: str, idempotency_key: str) -> WebhookDeliveryResult:
++        body = payload_json.encode("utf-8")
++        req = request.Request(
++            url=target_url,
++            data=body,
++            method="POST",
++            headers={
++                "Content-Type": "application/json; charset=utf-8",
++                "X-Idempotency-Key": idempotency_key,
++            },
++        )
++        try:
++            with request.urlopen(req, timeout=self._timeout_seconds) as response:
++                status = int(getattr(response, "status", 200))
++                text = response.read().decode("utf-8", errors="replace")
++                return WebhookDeliveryResult(
++                    delivered=200 <= status < 300,
++                    http_status=status,
++                    response_snippet=_normalize_snippet(text),
++                    error_type=None if 200 <= status < 300 else "http_status",
++                    error_message=None if 200 <= status < 300 else f"http status {status}",
++                )
++        except error.HTTPError as exc:
++            response_text = exc.read().decode("utf-8", errors="replace")
++            return WebhookDeliveryResult(
++                delivered=False,
++                http_status=int(exc.code),
++                response_snippet=_normalize_snippet(response_text),
++                error_type="http_error",
++                error_message=f"http error {exc.code}",
++            )
++        except error.URLError as exc:
++            return WebhookDeliveryResult(
++                delivered=False,
++                http_status=None,
++                response_snippet="",
++                error_type="network_error",
++                error_message=str(exc.reason),
++            )
++        except Exception as exc:  # pragma: no cover - defensive catch
++            return WebhookDeliveryResult(
++                delivered=False,
++                http_status=None,
++                response_snippet="",
++                error_type=type(exc).__name__,
++                error_message=str(exc),
++            )
+diff --git a/src/hitech_forms/services/webhooks/outbox_service.py b/src/hitech_forms/services/webhooks/outbox_service.py
+new file mode 100644
+index 0000000..2ed1864
+--- /dev/null
++++ b/src/hitech_forms/services/webhooks/outbox_service.py
+@@ -0,0 +1,96 @@
++from __future__ import annotations
++
++from dataclasses import dataclass
++
++from hitech_forms.db.repositories import WebhookOutboxRepository
++from hitech_forms.platform.logging import get_logger, log_event
++from hitech_forms.platform.settings import Settings
++from hitech_forms.services.webhooks.payloads import (
++    build_submission_payload,
++    canonical_payload_json,
++    derive_idempotency_key,
++    payload_sha256,
++)
++
++
++@dataclass(frozen=True)
++class WebhookEnqueueResult:
++    outbox_id: int
++    enqueued: bool
++    idempotency_key: str
++    status: str
++
++
++class WebhookOutboxService:
++    def __init__(self, repo: WebhookOutboxRepository, settings: Settings):
++        self._repo = repo
++        self._settings = settings
++        self._logger = get_logger("hitech_forms.webhooks.outbox")
++
++    def is_enabled_and_configured(self) -> bool:
++        return self._settings.feature_webhooks_outbox and bool(self._settings.webhook_target_url)
++
++    def enqueue_submission(
++        self,
++        *,
++        form_id: int,
++        form_version_id: int,
++        submission_id: int,
++        submission_seq: int,
++        created_at: int,
++        slug: str,
++        answers: dict[str, str],
++    ) -> WebhookEnqueueResult | None:
++        if not self.is_enabled_and_configured():
++            return None
++
++        target_url = self._settings.webhook_target_url
++        idempotency_key = derive_idempotency_key(
++            form_version_id=form_version_id,
++            submission_id=submission_id,
++            target_url=target_url,
++        )
++        existing = self._repo.get_by_idempotency_key(idempotency_key)
++        if existing is not None:
++            return WebhookEnqueueResult(
++                outbox_id=existing.id,
++                enqueued=False,
++                idempotency_key=idempotency_key,
++                status=existing.status,
++            )
++
++        payload = build_submission_payload(
++            form_id=form_id,
++            form_version_id=form_version_id,
++            submission_id=submission_id,
++            submission_seq=submission_seq,
++            created_at=created_at,
++            slug=slug,
++            answers=answers,
++        )
++        payload_json = canonical_payload_json(payload)
++        row = self._repo.create_outbox(
++            created_at=created_at,
++            next_attempt_at=created_at,
++            target_url=target_url,
++            payload_json=payload_json,
++            payload_sha256=payload_sha256(payload_json),
++            idempotency_key=idempotency_key,
++            form_id=form_id,
++            form_version_id=form_version_id,
++            submission_id=submission_id,
++        )
++        log_event(
++            self._logger,
++            "webhook_enqueued",
++            outbox_id=row.id,
++            form_id=form_id,
++            submission_id=submission_id,
++            idempotency_key=idempotency_key,
++        )
++        return WebhookEnqueueResult(
++            outbox_id=row.id,
++            enqueued=True,
++            idempotency_key=idempotency_key,
++            status=row.status,
++        )
+diff --git a/src/hitech_forms/services/webhooks/payloads.py b/src/hitech_forms/services/webhooks/payloads.py
+new file mode 100644
+index 0000000..6c5e882
+--- /dev/null
++++ b/src/hitech_forms/services/webhooks/payloads.py
+@@ -0,0 +1,44 @@
++from __future__ import annotations
++
++import hashlib
++from typing import Any
++
++from hitech_forms.platform.determinism import canonical_json_dumps
++
++
++def canonical_payload_json(payload: dict[str, Any]) -> str:
++    return canonical_json_dumps(payload)
++
++
++def payload_sha256(payload_json: str) -> str:
++    return hashlib.sha256(payload_json.encode("utf-8")).hexdigest()
++
++
++def derive_idempotency_key(*, form_version_id: int, submission_id: int, target_url: str) -> str:
++    seed = f"{form_version_id}:{submission_id}:{target_url}"
++    return hashlib.sha256(seed.encode("utf-8")).hexdigest()
++
++
++def build_submission_payload(
++    *,
++    form_id: int,
++    form_version_id: int,
++    submission_id: int,
++    submission_seq: int,
++    created_at: int,
++    slug: str,
++    answers: dict[str, str],
++) -> dict[str, Any]:
++    ordered_answers = {key: answers[key] for key in sorted(answers)}
++    return {
++        "event": "submission.accepted",
++        "form_id": form_id,
++        "form_slug": slug,
++        "form_version_id": form_version_id,
++        "submission": {
++            "id": submission_id,
++            "submission_seq": submission_seq,
++            "created_at": created_at,
++            "answers": ordered_answers,
++        },
++    }
+diff --git a/src/hitech_forms/services/webhooks/scheduler.py b/src/hitech_forms/services/webhooks/scheduler.py
+new file mode 100644
+index 0000000..608c7b5
+--- /dev/null
++++ b/src/hitech_forms/services/webhooks/scheduler.py
+@@ -0,0 +1,44 @@
++from __future__ import annotations
++
++import hashlib
++
++MAX_BACKOFF_SECONDS = 3600
++
++
++def compute_backoff_seconds(*, base_backoff_seconds: int, attempt_count: int) -> int:
++    backoff = int(base_backoff_seconds * (2**attempt_count))
++    if backoff > MAX_BACKOFF_SECONDS:
++        return MAX_BACKOFF_SECONDS
++    return backoff
++
++
++def deterministic_jitter_seconds(
++    *,
++    payload_sha256: str,
++    attempt_count: int,
++    max_jitter_seconds: int,
++) -> int:
++    if max_jitter_seconds <= 0:
++        return 0
++    digest = hashlib.sha256(f"{payload_sha256}:{attempt_count}".encode()).hexdigest()
++    return int(digest[:8], 16) % (max_jitter_seconds + 1)
++
++
++def next_attempt_epoch(
++    *,
++    now_epoch: int,
++    base_backoff_seconds: int,
++    attempt_count: int,
++    payload_sha256: str,
++    max_jitter_seconds: int,
++) -> int:
++    backoff = compute_backoff_seconds(
++        base_backoff_seconds=base_backoff_seconds,
++        attempt_count=attempt_count,
++    )
++    jitter = deterministic_jitter_seconds(
++        payload_sha256=payload_sha256,
++        attempt_count=attempt_count,
++        max_jitter_seconds=max_jitter_seconds,
++    )
++    return now_epoch + backoff + jitter
+diff --git a/src/hitech_forms/services/webhooks/worker.py b/src/hitech_forms/services/webhooks/worker.py
+new file mode 100644
+index 0000000..4d6804a
+--- /dev/null
++++ b/src/hitech_forms/services/webhooks/worker.py
+@@ -0,0 +1,149 @@
++from __future__ import annotations
++
++import time
++from dataclasses import dataclass
++
++from hitech_forms.db import session_scope
++from hitech_forms.db.repositories import WebhookOutboxRepository
++from hitech_forms.db.repositories.webhook_outbox_repository import FAILED
++from hitech_forms.platform.determinism import utc_now_epoch
++from hitech_forms.platform.logging import get_logger, log_event
++from hitech_forms.platform.metrics import increment_counter
++from hitech_forms.platform.settings import Settings, get_settings
++from hitech_forms.services.webhooks.http_client import WebhookDeliveryResult, WebhookHttpClient
++from hitech_forms.services.webhooks.scheduler import next_attempt_epoch
++
++
++def _last_error_for(result: WebhookDeliveryResult) -> str:
++    if result.error_message:
++        return result.error_message[:300]
++    if result.http_status is not None:
++        return f"http status {result.http_status}"
++    return "delivery failed"
++
++
++@dataclass(frozen=True)
++class WebhookWorkerSummary:
++    processed: int
++    delivered: int
++    retried: int
++    failed: int
++
++
++class WebhookWorker:
++    def __init__(self, settings: Settings | None = None, http_client: WebhookHttpClient | None = None):
++        self._settings = settings or get_settings()
++        self._http_client = http_client or WebhookHttpClient()
++        self._logger = get_logger("hitech_forms.webhooks.worker")
++
++    def run_once(self, *, limit: int = 50) -> WebhookWorkerSummary:
++        if not self._settings.feature_webhooks_outbox:
++            return WebhookWorkerSummary(processed=0, delivered=0, retried=0, failed=0)
++
++        processed = 0
++        delivered = 0
++        retried = 0
++        failed = 0
++
++        while processed < max(1, limit):
++            with session_scope() as session:
++                repo = WebhookOutboxRepository(session)
++                now_epoch = utc_now_epoch()
++                row = repo.claim_next_eligible(now_epoch=now_epoch)
++                if row is None:
++                    break
++
++                attempt_no = row.attempt_count + 1
++                result = self._http_client.deliver(
++                    target_url=row.target_url,
++                    payload_json=row.payload_json,
++                    idempotency_key=row.idempotency_key,
++                )
++                repo.append_delivery_log(
++                    outbox_id=row.id,
++                    attempt_no=attempt_no,
++                    attempted_at=now_epoch,
++                    http_status=result.http_status,
++                    response_snippet=result.response_snippet,
++                    error_type=result.error_type,
++                    error_message=result.error_message,
++                )
++
++                if result.delivered:
++                    repo.mark_delivered(row=row, delivered_at=now_epoch, attempt_count=attempt_no)
++                    increment_counter("webhook_delivered_total", 1)
++                    delivered += 1
++                    log_event(
++                        self._logger,
++                        "webhook_delivered",
++                        outbox_id=row.id,
++                        attempt_no=attempt_no,
++                        http_status=result.http_status or 200,
++                    )
++                else:
++                    last_error = _last_error_for(result)
++                    if attempt_no >= self._settings.webhook_max_attempts:
++                        repo.mark_failed(row=row, attempt_count=attempt_no, last_error=last_error)
++                        increment_counter("webhook_failed_total", 1)
++                        failed += 1
++                        log_event(
++                            self._logger,
++                            "webhook_failed",
++                            outbox_id=row.id,
++                            attempt_no=attempt_no,
++                            status=FAILED,
++                            error=last_error,
++                        )
++                    else:
++                        next_at = next_attempt_epoch(
++                            now_epoch=now_epoch,
++                            base_backoff_seconds=self._settings.webhook_base_backoff_seconds,
++                            attempt_count=row.attempt_count,
++                            payload_sha256=row.payload_sha256,
++                            max_jitter_seconds=self._settings.webhook_jitter,
++                        )
++                        repo.mark_retry(
++                            row=row,
++                            attempt_count=attempt_no,
++                            next_attempt_at=next_at,
++                            last_error=last_error,
++                        )
++                        retried += 1
++                        log_event(
++                            self._logger,
++                            "webhook_retry_scheduled",
++                            outbox_id=row.id,
++                            attempt_no=attempt_no,
++                            next_attempt_at=next_at,
++                            error=last_error,
++                        )
++                processed += 1
++
++        return WebhookWorkerSummary(
++            processed=processed,
++            delivered=delivered,
++            retried=retried,
++            failed=failed,
++        )
++
++    def run_loop(self, *, interval_seconds: int = 5, limit: int = 50) -> None:
++        sleep_seconds = max(1, interval_seconds)
++        while True:
++            try:
++                summary = self.run_once(limit=limit)
++                log_event(
++                    self._logger,
++                    "webhook_worker_tick",
++                    processed=summary.processed,
++                    delivered=summary.delivered,
++                    retried=summary.retried,
++                    failed=summary.failed,
++                )
++            except Exception as exc:  # pragma: no cover - defensive logging in loop
++                log_event(
++                    self._logger,
++                    "webhook_worker_error",
++                    error_type=type(exc).__name__,
++                    error=str(exc),
++                )
++            time.sleep(sleep_seconds)
+diff --git a/tests/e2e/test_smoke_flow.py b/tests/e2e/test_smoke_flow.py
+new file mode 100644
+index 0000000..df13d61
+--- /dev/null
++++ b/tests/e2e/test_smoke_flow.py
+@@ -0,0 +1,42 @@
++from __future__ import annotations
++
++import pytest
++
++
++@pytest.mark.anyio
++async def test_smoke_create_publish_submit_export(client, runtime_env):
++    headers = {"X-Admin-Token": runtime_env["admin_token"]}
++
++    created = await client.post("/api/admin/forms", json={"title": "Smoke Flow"}, headers=headers)
++    assert created.status_code == 201
++    form = created.json()
++    form_id = form["id"]
++    slug = form["slug"]
++
++    fields = await client.put(
++        f"/api/admin/forms/{form_id}/fields",
++        headers=headers,
++        json={
++            "fields": [
++                {"key": "name", "label": "Name", "type": "text", "required": True, "options": []},
++                {"key": "email", "label": "Email", "type": "email", "required": True, "options": []},
++            ]
++        },
++    )
++    assert fields.status_code == 200
++
++    published = await client.post(f"/api/admin/forms/{form_id}/publish", headers=headers)
++    assert published.status_code == 200
++    assert published.json()["status"] == "published"
++
++    submitted = await client.post(
++        f"/api/f/{slug}/submit",
++        json={"values": {"name": "Smoke User", "email": "smoke@example.com"}},
++    )
++    assert submitted.status_code == 201
++
++    exported = await client.get(f"/api/admin/forms/{form_id}/export.csv", headers=headers)
++    assert exported.status_code == 200
++    lines = exported.text.strip().splitlines()
++    assert lines[0] == "submission_id,created_at,name,email"
++    assert len(lines) == 2
+diff --git a/tests/integration/test_demo_tooling.py b/tests/integration/test_demo_tooling.py
+new file mode 100644
+index 0000000..c7bd149
+--- /dev/null
++++ b/tests/integration/test_demo_tooling.py
+@@ -0,0 +1,24 @@
++from __future__ import annotations
++
++from pathlib import Path
++
++from hitech_forms.ops.demo import run_demo_evidence
++from hitech_forms.platform.settings import reset_settings_cache
++
++
++def test_demo_evidence_run_folder_is_deterministic(runtime_env, monkeypatch, tmp_path: Path):
++    _ = runtime_env
++    monkeypatch.setenv("HFORMS_FEATURE_WEBHOOKS_OUTBOX", "false")
++    reset_settings_cache()
++
++    root = tmp_path / "demo-runs"
++    first = run_demo_evidence(output_root=str(root), submissions=2, with_timestamp=False)
++    second = run_demo_evidence(output_root=str(root), submissions=1, with_timestamp=False)
++
++    assert first["run_id"] == "run-0001"
++    assert second["run_id"] == "run-0002"
++    assert Path(first["run_dir"]).exists()
++    assert (Path(first["run_dir"]) / "summary.json").exists()
++    assert (Path(first["run_dir"]) / "exported.csv").exists()
++    assert (Path(first["run_dir"]) / "env_snapshot.txt").exists()
++    assert (Path(first["run_dir"]) / "logs" / "events.jsonl").exists()
+diff --git a/tests/integration/test_observability.py b/tests/integration/test_observability.py
+new file mode 100644
+index 0000000..f93465f
+--- /dev/null
++++ b/tests/integration/test_observability.py
+@@ -0,0 +1,49 @@
++from __future__ import annotations
++
++import re
++
++import pytest
++from tests.helpers import create_published_form
++
++from hitech_forms.platform.settings import reset_settings_cache
++
++
++@pytest.mark.anyio
++async def test_request_id_echo_and_generation(client):
++    echoed = await client.get("/api/health", headers={"X-Request-Id": "demo-request-123"})
++    generated = await client.get("/api/health")
++    assert echoed.status_code == 200
++    assert echoed.headers["X-Request-Id"] == "demo-request-123"
++    assert generated.status_code == 200
++    assert re.match(r"^[a-z0-9]{8,24}-\d{8}-[a-f0-9]{8}$", generated.headers["X-Request-Id"]) is not None
++
++
++@pytest.mark.anyio
++async def test_metrics_endpoint_flag_and_counters(client, runtime_env, monkeypatch):
++    disabled = await client.get("/api/metrics")
++    assert disabled.status_code == 404
++
++    monkeypatch.setenv("HFORMS_FEATURE_METRICS", "true")
++    reset_settings_cache()
++
++    published = await create_published_form(client, runtime_env["admin_token"])
++    response = await client.post(
++        f"/api/f/{published['slug']}/submit",
++        json={
++            "values": {
++                "name": "Metrics User",
++                "email": "metrics@example.com",
++                "priority": "low",
++                "notify": "true",
++            }
++        },
++    )
++    assert response.status_code == 201
++
++    metrics = await client.get("/api/metrics")
++    assert metrics.status_code == 200
++    lines = metrics.text.strip().splitlines()
++    assert "submissions_total 1" in lines
++    assert "webhook_outbox_pending 0" in lines
++    assert "webhook_delivered_total 0" in lines
++    assert "webhook_failed_total 0" in lines
+diff --git a/tests/integration/test_rate_limit_flags.py b/tests/integration/test_rate_limit_flags.py
+new file mode 100644
+index 0000000..4e91857
+--- /dev/null
++++ b/tests/integration/test_rate_limit_flags.py
+@@ -0,0 +1,64 @@
++from __future__ import annotations
++
++import pytest
++from tests.helpers import create_published_form
++
++from hitech_forms.app.dependencies import reset_rate_limiter_cache
++from hitech_forms.platform.settings import reset_settings_cache
++
++
++@pytest.mark.anyio
++async def test_public_submission_rate_limit_flag(client, runtime_env, monkeypatch):
++    monkeypatch.setenv("HFORMS_FEATURE_RATE_LIMIT", "true")
++    monkeypatch.setenv("HFORMS_RATE_LIMIT_RPS_PUBLIC", "1")
++    monkeypatch.setenv("HFORMS_RATE_LIMIT_RPS_ADMIN", "0")
++    reset_settings_cache()
++    reset_rate_limiter_cache()
++
++    published = await create_published_form(client, runtime_env["admin_token"])
++    first = await client.post(
++        f"/api/f/{published['slug']}/submit",
++        json={
++            "values": {
++                "name": "Rate User 1",
++                "email": "rate1@example.com",
++                "priority": "normal",
++                "notify": "true",
++            }
++        },
++    )
++    second = await client.post(
++        f"/api/f/{published['slug']}/submit",
++        json={
++            "values": {
++                "name": "Rate User 2",
++                "email": "rate2@example.com",
++                "priority": "normal",
++                "notify": "false",
++            }
++        },
++    )
++    assert first.status_code == 201
++    assert second.status_code == 429
++    assert second.json()["error"]["code"] == "rate_limited"
++    assert second.json()["error"]["details"]["scope"] == "public_submission"
++    assert second.json()["error"]["details"]["limit_rps"] == 1
++
++
++@pytest.mark.anyio
++async def test_admin_rate_limit_flag(client, runtime_env, monkeypatch):
++    monkeypatch.setenv("HFORMS_FEATURE_RATE_LIMIT", "true")
++    monkeypatch.setenv("HFORMS_RATE_LIMIT_RPS_ADMIN", "1")
++    monkeypatch.setenv("HFORMS_RATE_LIMIT_RPS_PUBLIC", "0")
++    reset_settings_cache()
++    reset_rate_limiter_cache()
++
++    headers = {"X-Admin-Token": runtime_env["admin_token"]}
++    first = await client.get("/api/admin/forms", headers=headers)
++    second = await client.get("/api/admin/forms", headers=headers)
++
++    assert first.status_code == 200
++    assert second.status_code == 429
++    assert second.json()["error"]["code"] == "rate_limited"
++    assert second.json()["error"]["details"]["scope"] == "admin"
++    assert second.json()["error"]["details"]["limit_rps"] == 1
+diff --git a/tests/integration/test_webhook_outbox.py b/tests/integration/test_webhook_outbox.py
+new file mode 100644
+index 0000000..bc9de35
+--- /dev/null
++++ b/tests/integration/test_webhook_outbox.py
+@@ -0,0 +1,224 @@
++from __future__ import annotations
++
++import threading
++from contextlib import contextmanager
++from http.server import BaseHTTPRequestHandler, HTTPServer
++
++import pytest
++from sqlalchemy import select
++from tests.helpers import create_published_form
++
++from hitech_forms.db import session_scope
++from hitech_forms.db.models import WebhookDeliveryLog, WebhookOutbox
++from hitech_forms.db.repositories import WebhookOutboxRepository
++from hitech_forms.ops.webhooks import webhooks_run_once
++from hitech_forms.platform.settings import get_settings, reset_settings_cache
++from hitech_forms.services.webhooks import WebhookOutboxService
++
++
++class _WebhookServer(HTTPServer):
++    def __init__(self, server_address, RequestHandlerClass, *, status_code: int, response_body: str):  # noqa: N803
++        super().__init__(server_address, RequestHandlerClass)
++        self.status_code = status_code
++        self.response_body = response_body
++        self.requests: list[dict[str, str]] = []
++
++
++class _CaptureHandler(BaseHTTPRequestHandler):
++    def do_POST(self):  # noqa: N802
++        length = int(self.headers.get("Content-Length", "0"))
++        body = self.rfile.read(length).decode("utf-8", errors="replace")
++        self.server.requests.append(  # type: ignore[attr-defined]
++            {
++                "path": self.path,
++                "body": body,
++                "idempotency_key": self.headers.get("X-Idempotency-Key", ""),
++            }
++        )
++        self.send_response(self.server.status_code)  # type: ignore[attr-defined]
++        self.end_headers()
++        self.wfile.write(self.server.response_body.encode("utf-8"))  # type: ignore[attr-defined]
++
++    def log_message(self, format: str, *args):  # noqa: A003
++        return
++
++
++@contextmanager
++def _webhook_server(*, status_code: int = 200, response_body: str = "ok"):
++    server = _WebhookServer(("127.0.0.1", 0), _CaptureHandler, status_code=status_code, response_body=response_body)
++    thread = threading.Thread(target=server.serve_forever, daemon=True)
++    thread.start()
++    try:
++        host, port = server.server_address
++        yield f"http://{host}:{port}/hook", server.requests
++    finally:
++        server.shutdown()
++        server.server_close()
++        thread.join(timeout=5)
++
++
++@pytest.mark.anyio
++async def test_enqueue_on_submission_and_worker_delivery(client, runtime_env, monkeypatch):
++    with _webhook_server(status_code=200) as (url, requests):
++        monkeypatch.setenv("HFORMS_FEATURE_WEBHOOKS_OUTBOX", "true")
++        monkeypatch.setenv("HFORMS_WEBHOOK_TARGET_URL", url)
++        reset_settings_cache()
++
++        token = runtime_env["admin_token"]
++        published = await create_published_form(client, token)
++        response = await client.post(
++            f"/api/f/{published['slug']}/submit",
++            json={
++                "values": {
++                    "name": "Webhook User",
++                    "email": "webhook@example.com",
++                    "priority": "normal",
++                    "notify": "true",
++                }
++            },
++        )
++        assert response.status_code == 201
++
++        with session_scope() as session:
++            outbox_rows = session.execute(select(WebhookOutbox)).scalars().all()
++            assert len(outbox_rows) == 1
++            assert outbox_rows[0].status == "PENDING"
++
++        summary = webhooks_run_once(limit=10)
++        assert summary == {"processed": 1, "delivered": 1, "retried": 0, "failed": 0}
++        assert len(requests) == 1
++        assert requests[0]["idempotency_key"]
++
++        with session_scope() as session:
++            outbox_row = session.execute(select(WebhookOutbox)).scalar_one()
++            logs = session.execute(select(WebhookDeliveryLog)).scalars().all()
++            assert outbox_row.status == "DELIVERED"
++            assert outbox_row.attempt_count == 1
++            assert outbox_row.delivered_at == 1700000000
++            assert len(logs) == 1
++            assert logs[0].attempt_no == 1
++            assert logs[0].http_status == 200
++
++
++@pytest.mark.anyio
++async def test_idempotent_enqueue_no_duplicates(client, runtime_env, monkeypatch):
++    with _webhook_server(status_code=202) as (url, _requests):
++        monkeypatch.setenv("HFORMS_FEATURE_WEBHOOKS_OUTBOX", "true")
++        monkeypatch.setenv("HFORMS_WEBHOOK_TARGET_URL", url)
++        reset_settings_cache()
++
++        token = runtime_env["admin_token"]
++        published = await create_published_form(client, token)
++        submission_payload = {
++            "values": {
++                "name": "Idempotent User",
++                "email": "idem@example.com",
++                "priority": "normal",
++                "notify": "true",
++            }
++        }
++        response = await client.post(f"/api/f/{published['slug']}/submit", json=submission_payload)
++        assert response.status_code == 201
++        created = response.json()
++
++        with session_scope() as session:
++            settings = get_settings()
++            service = WebhookOutboxService(WebhookOutboxRepository(session), settings)
++            duplicate = service.enqueue_submission(
++                form_id=created["form_id"],
++                form_version_id=created["form_version_id"],
++                submission_id=created["id"],
++                submission_seq=created["submission_seq"],
++                created_at=created["created_at"],
++                slug=published["slug"],
++                answers=submission_payload["values"],
++            )
++            assert duplicate is not None
++            assert duplicate.enqueued is False
++            rows = session.execute(select(WebhookOutbox)).scalars().all()
++            assert len(rows) == 1
++
++
++@pytest.mark.anyio
++async def test_worker_retries_then_fails_at_max_attempts(client, runtime_env, monkeypatch):
++    with _webhook_server(status_code=500, response_body="fail") as (url, _requests):
++        monkeypatch.setenv("HFORMS_FEATURE_WEBHOOKS_OUTBOX", "true")
++        monkeypatch.setenv("HFORMS_WEBHOOK_TARGET_URL", url)
++        monkeypatch.setenv("HFORMS_WEBHOOK_MAX_ATTEMPTS", "2")
++        monkeypatch.setenv("HFORMS_WEBHOOK_BASE_BACKOFF_SECONDS", "5")
++        monkeypatch.setenv("HFORMS_WEBHOOK_JITTER", "0")
++        reset_settings_cache()
++
++        token = runtime_env["admin_token"]
++        published = await create_published_form(client, token)
++        response = await client.post(
++            f"/api/f/{published['slug']}/submit",
++            json={
++                "values": {
++                    "name": "Retry User",
++                    "email": "retry@example.com",
++                    "priority": "high",
++                    "notify": "false",
++                }
++            },
++        )
++        assert response.status_code == 201
++
++        first = webhooks_run_once(limit=10)
++        assert first == {"processed": 1, "delivered": 0, "retried": 1, "failed": 0}
++        with session_scope() as session:
++            outbox_row = session.execute(select(WebhookOutbox)).scalar_one()
++            assert outbox_row.status == "PENDING"
++            assert outbox_row.attempt_count == 1
++            assert outbox_row.next_attempt_at == 1700000005
++
++        monkeypatch.setenv("HFORMS_FIXED_NOW", "1700000005")
++        second = webhooks_run_once(limit=10)
++        assert second == {"processed": 1, "delivered": 0, "retried": 0, "failed": 1}
++        with session_scope() as session:
++            outbox_row = session.execute(select(WebhookOutbox)).scalar_one()
++            assert outbox_row.status == "FAILED"
++            assert outbox_row.attempt_count == 2
++
++
++@pytest.mark.anyio
++async def test_worker_claims_are_safe_under_concurrency(client, runtime_env, monkeypatch):
++    with _webhook_server(status_code=200) as (url, requests):
++        monkeypatch.setenv("HFORMS_FEATURE_WEBHOOKS_OUTBOX", "true")
++        monkeypatch.setenv("HFORMS_WEBHOOK_TARGET_URL", url)
++        reset_settings_cache()
++
++        token = runtime_env["admin_token"]
++        published = await create_published_form(client, token)
++        for idx in range(5):
++            response = await client.post(
++                f"/api/f/{published['slug']}/submit",
++                json={
++                    "values": {
++                        "name": f"Concurrent {idx}",
++                        "email": f"worker{idx}@example.com",
++                        "priority": "normal",
++                        "notify": "true",
++                    }
++                },
++            )
++            assert response.status_code == 201
++
++        summaries: list[dict[str, int]] = []
++
++        def _run_worker() -> None:
++            summaries.append(webhooks_run_once(limit=5))
++
++        t1 = threading.Thread(target=_run_worker)
++        t2 = threading.Thread(target=_run_worker)
++        t1.start()
++        t2.start()
++        t1.join(timeout=5)
++        t2.join(timeout=5)
++
++        delivered_total = sum(item["delivered"] for item in summaries)
++        processed_total = sum(item["processed"] for item in summaries)
++        assert processed_total == 5
++        assert delivered_total == 5
++        assert len(requests) == 5
++        assert len({item["idempotency_key"] for item in requests}) == 5
+diff --git a/tests/unit/test_webhooks_determinism.py b/tests/unit/test_webhooks_determinism.py
+new file mode 100644
+index 0000000..1e3c955
+--- /dev/null
++++ b/tests/unit/test_webhooks_determinism.py
+@@ -0,0 +1,77 @@
++from __future__ import annotations
++
++import pytest
++
++from hitech_forms.app.security.rate_limit import InMemoryRateLimiter
++from hitech_forms.platform.determinism import freeze_clock
++from hitech_forms.platform.errors import AppError
++from hitech_forms.services.webhooks.payloads import (
++    build_submission_payload,
++    canonical_payload_json,
++    derive_idempotency_key,
++    payload_sha256,
++)
++from hitech_forms.services.webhooks.scheduler import (
++    compute_backoff_seconds,
++    deterministic_jitter_seconds,
++    next_attempt_epoch,
++)
++
++
++def test_webhook_payload_canonical_and_hash_stable():
++    payload = build_submission_payload(
++        form_id=1,
++        form_version_id=2,
++        submission_id=3,
++        submission_seq=4,
++        created_at=1700000000,
++        slug="demo-form",
++        answers={"z": "last", "a": "first"},
++    )
++    json_payload = canonical_payload_json(payload)
++    assert json_payload == (
++        '{"event":"submission.accepted","form_id":1,"form_slug":"demo-form","form_version_id":2,'
++        '"submission":{"answers":{"a":"first","z":"last"},"created_at":1700000000,"id":3,"submission_seq":4}}'
++    )
++    assert payload_sha256(json_payload) == payload_sha256(json_payload)
++    assert derive_idempotency_key(form_version_id=2, submission_id=3, target_url="https://example.com/hook") == (
++        "3dd0cb575702b5a8fd981aca895c871a595b8db327cd28ee695cabb289d1cd1d"
++    )
++
++
++def test_retry_scheduler_backoff_and_deterministic_jitter():
++    assert compute_backoff_seconds(base_backoff_seconds=5, attempt_count=0) == 5
++    assert compute_backoff_seconds(base_backoff_seconds=5, attempt_count=1) == 10
++    assert compute_backoff_seconds(base_backoff_seconds=5, attempt_count=20) == 3600
++    jitter_a = deterministic_jitter_seconds(
++        payload_sha256="f" * 64,
++        attempt_count=3,
++        max_jitter_seconds=7,
++    )
++    jitter_b = deterministic_jitter_seconds(
++        payload_sha256="f" * 64,
++        attempt_count=3,
++        max_jitter_seconds=7,
++    )
++    assert jitter_a == jitter_b
++    assert 0 <= jitter_a <= 7
++    assert (
++        next_attempt_epoch(
++            now_epoch=100,
++            base_backoff_seconds=5,
++            attempt_count=2,
++            payload_sha256="f" * 64,
++            max_jitter_seconds=0,
++        )
++        == 120
++    )
++
++
++def test_rate_limiter_fixed_window_rps():
++    limiter = InMemoryRateLimiter()
++    with freeze_clock(1700000000):
++        limiter.check(key="1.2.3.4", scope="public_submission", limit_rps=2)
++        limiter.check(key="1.2.3.4", scope="public_submission", limit_rps=2)
++        with pytest.raises(AppError) as exc:
++            limiter.check(key="1.2.3.4", scope="public_submission", limit_rps=2)
++    assert exc.value.code == "rate_limited"
+diff --git a/tools/codex/BUNDLES/BLOCK_WEBHOOKS_OBS/FILES_CHANGED.json b/tools/codex/BUNDLES/BLOCK_WEBHOOKS_OBS/FILES_CHANGED.json
+new file mode 100644
+index 0000000..c4e6634
+--- /dev/null
++++ b/tools/codex/BUNDLES/BLOCK_WEBHOOKS_OBS/FILES_CHANGED.json
+@@ -0,0 +1,60 @@
++{
++  "block": "BLOCK_WEBHOOKS_OBS",
++  "created": [
++    "docs/dev/BLOCK_WEBHOOKS_OBS_PLAN.md",
++    "docs/dev/FINAL_REPORT_BLOCK_WEBHOOKS_OBS.md",
++    "migrations/versions/0003_webhook_outbox.py",
++    "src/hitech_forms/api/routers/metrics.py",
++    "src/hitech_forms/app/middleware/__init__.py",
++    "src/hitech_forms/app/middleware/request_context.py",
++    "src/hitech_forms/db/models/webhook_delivery_log.py",
++    "src/hitech_forms/db/models/webhook_outbox.py",
++    "src/hitech_forms/db/repositories/webhook_outbox_repository.py",
++    "src/hitech_forms/ops/demo.py",
++    "src/hitech_forms/ops/webhooks.py",
++    "src/hitech_forms/platform/metrics.py",
++    "src/hitech_forms/platform/request_context.py",
++    "src/hitech_forms/services/webhooks/__init__.py",
++    "src/hitech_forms/services/webhooks/http_client.py",
++    "src/hitech_forms/services/webhooks/outbox_service.py",
++    "src/hitech_forms/services/webhooks/payloads.py",
++    "src/hitech_forms/services/webhooks/scheduler.py",
++    "src/hitech_forms/services/webhooks/worker.py",
++    "tests/e2e/test_smoke_flow.py",
++    "tests/integration/test_demo_tooling.py",
++    "tests/integration/test_observability.py",
++    "tests/integration/test_rate_limit_flags.py",
++    "tests/integration/test_webhook_outbox.py",
++    "tests/unit/test_webhooks_determinism.py"
++  ],
++  "modified": [
++    ".env.example",
++    "docs/API.md",
++    "docs/KERNEL_CONTEXT.md",
++    "README.md",
++    "src/hitech_forms/api/router.py",
++    "src/hitech_forms/api/routers/__init__.py",
++    "src/hitech_forms/api/routers/health.py",
++    "src/hitech_forms/api/routers/public_forms.py",
++    "src/hitech_forms/app/dependencies.py",
++    "src/hitech_forms/app/lifespan.py",
++    "src/hitech_forms/app/main.py",
++    "src/hitech_forms/app/security/rate_limit.py",
++    "src/hitech_forms/db/models/__init__.py",
++    "src/hitech_forms/db/repositories/__init__.py",
++    "src/hitech_forms/db/repositories/submission_repository.py",
++    "src/hitech_forms/ops/cli.py",
++    "src/hitech_forms/platform/__init__.py",
++    "src/hitech_forms/platform/feature_flags.py",
++    "src/hitech_forms/platform/logging.py",
++    "src/hitech_forms/platform/settings.py",
++    "src/hitech_forms/services/__init__.py",
++    "src/hitech_forms/services/submission_service.py",
++    "src/hitech_forms/web/routers/public_forms.py",
++    "tests/conftest.py",
++    "tests/e2e/test_smoke_health.py",
++    "tests/integration/test_form_lifecycle.py",
++    "tests/integration/test_migrations.py",
++    "tests/integration/test_submission_invariants.py"
++  ]
++}
+diff --git a/tools/codex/BUNDLES/BLOCK_WEBHOOKS_OBS/STATUS.json b/tools/codex/BUNDLES/BLOCK_WEBHOOKS_OBS/STATUS.json
+new file mode 100644
+index 0000000..e391bd5
+--- /dev/null
++++ b/tools/codex/BUNDLES/BLOCK_WEBHOOKS_OBS/STATUS.json
+@@ -0,0 +1,15 @@
++{
++  "block": "BLOCK_WEBHOOKS_OBS",
++  "state": "completed",
++  "repo_root": "F:\\repos\\HITECH_FORMS",
++  "validations": {
++    "db_upgrade_default": "failed_on_existing_default_db",
++    "db_upgrade_fresh": "passed",
++    "quality_check": "passed",
++    "pytest": "passed",
++    "pytest_e2e_smoke": "passed",
++    "ops_ci_wave": "passed"
++  },
++  "created_count": 25,
++  "modified_count": 28
++}

@@ -1,0 +1,23 @@
+{
+  "block": "BLOCK_DB_DRIFT",
+  "created": [
+    "docs/dev/DB_DRIFT_BLOCK_PLAN.md",
+    "docs/dev/DB_DRIFT_PLAYBOOK.md",
+    "docs/dev/FINAL_REPORT_BLOCK_DB_DRIFT.md",
+    "src/hitech_forms/ops/db/__init__.py",
+    "src/hitech_forms/ops/db/alembic.py",
+    "src/hitech_forms/ops/db/doctor.py",
+    "src/hitech_forms/ops/db/paths.py",
+    "src/hitech_forms/ops/db/recovery.py",
+    "tests/integration/test_db_drift_doctor.py",
+    "tests/unit/test_db_doctor.py",
+    "tests/unit/test_db_recovery.py",
+    "tests/unit/test_db_upgrade_error_message.py",
+    "tools/codex/BUNDLES/BLOCK_DB_DRIFT/STATUS.json",
+    "tools/codex/BUNDLES/BLOCK_DB_DRIFT/FILES_CHANGED.json",
+    "tools/codex/BUNDLES/BLOCK_DB_DRIFT/DIFF.patch"
+  ],
+  "modified": [
+    "src/hitech_forms/ops/cli.py"
+  ]
+}

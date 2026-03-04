@@ -1,0 +1,413 @@
+{
+  "repo": "F:\\repos\\hitech-forms",
+  "status": "fail",
+  "start_time": "2026-03-04T06:50:09Z",
+  "end_time": "2026-03-04T06:50:09Z",
+  "new_docs": [
+    "ARCHITECTURE_DECISIONS.md",
+    "BACKUP_AND_RECOVERY.md",
+    "BENCHMARKS.md",
+    "BRANDING.md",
+    "CHANGELOG.md",
+    "CLA.md",
+    "CODESTYLE.md",
+    "CODE_OF_CONDUCT.md",
+    "COMMUNITY.md",
+    "COMPATIBILITY.md",
+    "CONFIGURATION.md",
+    "CONFIGURATION_REFERENCE.md",
+    "CONTRIBUTING.md",
+    "DATA_FLOW.md",
+    "DCO.md",
+    "DEPENDENCIES.md",
+    "DEPENDENCY_POLICY.md",
+    "DEPLOYMENT.md",
+    "DEPRECATIONS.md",
+    "ENVIRONMENT.md",
+    "ENVIRONMENT_VARIABLES.md",
+    "FAQ.md",
+    "GOVERNANCE.md",
+    "INCIDENT_RESPONSE.md",
+    "LICENSE",
+    "MAINTAINERS.md",
+    "MIGRATIONS.md",
+    "MODULE_BOUNDARIES.md",
+    "NOTICE",
+    "PERFORMANCE.md",
+    "PRIVACY.md",
+    "QUALITY_STANDARDS.md",
+    "RELEASING.md",
+    "ROADMAP.md",
+    "RUNBOOK.md",
+    "SECURITY.md",
+    "SUPPLY_CHAIN.md",
+    "SUPPORT.md",
+    "SYSTEM_OVERVIEW.md",
+    "TERMS.md",
+    "TESTING.md",
+    "THIRD_PARTY_NOTICES.md",
+    "THREAT_MODEL.md",
+    "TRADEMARKS.md",
+    "TROUBLESHOOTING.md",
+    "VERSIONING.md",
+    "docs/README.md",
+    "docs/adr",
+    "docs/api",
+    "docs/compliance",
+    "docs/design",
+    "docs/dev",
+    "docs/factory",
+    "docs/governance",
+    "docs/playbooks",
+    "docs/releases",
+    "docs/runbooks",
+    "docs/security",
+    "scripts/README.md",
+    "telemetry.md",
+    "tools/README.md"
+  ],
+  "all_docs_count": 162,
+  "new_docs_count": 61,
+  "violations": [
+    {
+      "rule": "allowed_locations",
+      "path": "ARCHITECTURE_DECISIONS.md",
+      "message": "New documentation must live in docs/ or be an allowed root doc file."
+    },
+    {
+      "rule": "allowed_locations",
+      "path": "BACKUP_AND_RECOVERY.md",
+      "message": "New documentation must live in docs/ or be an allowed root doc file."
+    },
+    {
+      "rule": "allowed_locations",
+      "path": "BENCHMARKS.md",
+      "message": "New documentation must live in docs/ or be an allowed root doc file."
+    },
+    {
+      "rule": "allowed_locations",
+      "path": "BRANDING.md",
+      "message": "New documentation must live in docs/ or be an allowed root doc file."
+    },
+    {
+      "rule": "allowed_locations",
+      "path": "CODESTYLE.md",
+      "message": "New documentation must live in docs/ or be an allowed root doc file."
+    },
+    {
+      "rule": "allowed_locations",
+      "path": "CODE_OF_CONDUCT.md",
+      "message": "New documentation must live in docs/ or be an allowed root doc file."
+    },
+    {
+      "rule": "allowed_locations",
+      "path": "COMMUNITY.md",
+      "message": "New documentation must live in docs/ or be an allowed root doc file."
+    },
+    {
+      "rule": "allowed_locations",
+      "path": "COMPATIBILITY.md",
+      "message": "New documentation must live in docs/ or be an allowed root doc file."
+    },
+    {
+      "rule": "allowed_locations",
+      "path": "CONFIGURATION.md",
+      "message": "New documentation must live in docs/ or be an allowed root doc file."
+    },
+    {
+      "rule": "allowed_locations",
+      "path": "CONFIGURATION_REFERENCE.md",
+      "message": "New documentation must live in docs/ or be an allowed root doc file."
+    },
+    {
+      "rule": "allowed_locations",
+      "path": "DATA_FLOW.md",
+      "message": "New documentation must live in docs/ or be an allowed root doc file."
+    },
+    {
+      "rule": "allowed_locations",
+      "path": "DCO.md",
+      "message": "New documentation must live in docs/ or be an allowed root doc file."
+    },
+    {
+      "rule": "allowed_locations",
+      "path": "DEPENDENCIES.md",
+      "message": "New documentation must live in docs/ or be an allowed root doc file."
+    },
+    {
+      "rule": "allowed_locations",
+      "path": "DEPENDENCY_POLICY.md",
+      "message": "New documentation must live in docs/ or be an allowed root doc file."
+    },
+    {
+      "rule": "allowed_locations",
+      "path": "DEPLOYMENT.md",
+      "message": "New documentation must live in docs/ or be an allowed root doc file."
+    },
+    {
+      "rule": "allowed_locations",
+      "path": "DEPRECATIONS.md",
+      "message": "New documentation must live in docs/ or be an allowed root doc file."
+    },
+    {
+      "rule": "allowed_locations",
+      "path": "ENVIRONMENT.md",
+      "message": "New documentation must live in docs/ or be an allowed root doc file."
+    },
+    {
+      "rule": "allowed_locations",
+      "path": "ENVIRONMENT_VARIABLES.md",
+      "message": "New documentation must live in docs/ or be an allowed root doc file."
+    },
+    {
+      "rule": "allowed_locations",
+      "path": "FAQ.md",
+      "message": "New documentation must live in docs/ or be an allowed root doc file."
+    },
+    {
+      "rule": "allowed_locations",
+      "path": "GOVERNANCE.md",
+      "message": "New documentation must live in docs/ or be an allowed root doc file."
+    },
+    {
+      "rule": "allowed_locations",
+      "path": "INCIDENT_RESPONSE.md",
+      "message": "New documentation must live in docs/ or be an allowed root doc file."
+    },
+    {
+      "rule": "allowed_locations",
+      "path": "MAINTAINERS.md",
+      "message": "New documentation must live in docs/ or be an allowed root doc file."
+    },
+    {
+      "rule": "allowed_locations",
+      "path": "MIGRATIONS.md",
+      "message": "New documentation must live in docs/ or be an allowed root doc file."
+    },
+    {
+      "rule": "allowed_locations",
+      "path": "MODULE_BOUNDARIES.md",
+      "message": "New documentation must live in docs/ or be an allowed root doc file."
+    },
+    {
+      "rule": "allowed_locations",
+      "path": "PERFORMANCE.md",
+      "message": "New documentation must live in docs/ or be an allowed root doc file."
+    },
+    {
+      "rule": "allowed_locations",
+      "path": "PRIVACY.md",
+      "message": "New documentation must live in docs/ or be an allowed root doc file."
+    },
+    {
+      "rule": "allowed_locations",
+      "path": "QUALITY_STANDARDS.md",
+      "message": "New documentation must live in docs/ or be an allowed root doc file."
+    },
+    {
+      "rule": "allowed_locations",
+      "path": "RELEASING.md",
+      "message": "New documentation must live in docs/ or be an allowed root doc file."
+    },
+    {
+      "rule": "allowed_locations",
+      "path": "ROADMAP.md",
+      "message": "New documentation must live in docs/ or be an allowed root doc file."
+    },
+    {
+      "rule": "allowed_locations",
+      "path": "RUNBOOK.md",
+      "message": "New documentation must live in docs/ or be an allowed root doc file."
+    },
+    {
+      "rule": "allowed_locations",
+      "path": "SUPPLY_CHAIN.md",
+      "message": "New documentation must live in docs/ or be an allowed root doc file."
+    },
+    {
+      "rule": "allowed_locations",
+      "path": "SUPPORT.md",
+      "message": "New documentation must live in docs/ or be an allowed root doc file."
+    },
+    {
+      "rule": "allowed_locations",
+      "path": "SYSTEM_OVERVIEW.md",
+      "message": "New documentation must live in docs/ or be an allowed root doc file."
+    },
+    {
+      "rule": "allowed_locations",
+      "path": "TERMS.md",
+      "message": "New documentation must live in docs/ or be an allowed root doc file."
+    },
+    {
+      "rule": "allowed_locations",
+      "path": "TESTING.md",
+      "message": "New documentation must live in docs/ or be an allowed root doc file."
+    },
+    {
+      "rule": "allowed_locations",
+      "path": "THIRD_PARTY_NOTICES.md",
+      "message": "New documentation must live in docs/ or be an allowed root doc file."
+    },
+    {
+      "rule": "allowed_locations",
+      "path": "THREAT_MODEL.md",
+      "message": "New documentation must live in docs/ or be an allowed root doc file."
+    },
+    {
+      "rule": "allowed_locations",
+      "path": "TRADEMARKS.md",
+      "message": "New documentation must live in docs/ or be an allowed root doc file."
+    },
+    {
+      "rule": "allowed_locations",
+      "path": "TROUBLESHOOTING.md",
+      "message": "New documentation must live in docs/ or be an allowed root doc file."
+    },
+    {
+      "rule": "allowed_locations",
+      "path": "VERSIONING.md",
+      "message": "New documentation must live in docs/ or be an allowed root doc file."
+    },
+    {
+      "rule": "allowed_locations",
+      "path": "scripts/README.md",
+      "message": "New documentation must live in docs/ or be an allowed root doc file."
+    },
+    {
+      "rule": "allowed_locations",
+      "path": "telemetry.md",
+      "message": "New documentation must live in docs/ or be an allowed root doc file."
+    },
+    {
+      "rule": "allowed_locations",
+      "path": "tools/README.md",
+      "message": "New documentation must live in docs/ or be an allowed root doc file."
+    },
+    {
+      "rule": "doc_limits",
+      "path": "docs/",
+      "message": "New documentation file count 61 exceeds max_new_docs limit 50."
+    },
+    {
+      "rule": "duplicate_docs",
+      "path": "GOVERNANCE.md",
+      "message": "Document name already exists in repository."
+    },
+    {
+      "rule": "duplicate_docs",
+      "path": "SECURITY.md",
+      "message": "Document name already exists in repository."
+    },
+    {
+      "rule": "duplicate_docs",
+      "path": "SUPPLY_CHAIN.md",
+      "message": "Document name already exists in repository."
+    },
+    {
+      "rule": "duplicate_docs",
+      "path": "docs/README.md",
+      "message": "Document name already exists in repository."
+    },
+    {
+      "rule": "duplicate_docs",
+      "path": "docs/api",
+      "message": "Document name already exists in repository."
+    },
+    {
+      "rule": "duplicate_docs",
+      "path": "docs/governance",
+      "message": "Document name already exists in repository."
+    },
+    {
+      "rule": "duplicate_docs",
+      "path": "docs/security",
+      "message": "Document name already exists in repository."
+    },
+    {
+      "rule": "duplicate_docs",
+      "path": "scripts/README.md",
+      "message": "Document name already exists in repository."
+    },
+    {
+      "rule": "duplicate_docs",
+      "path": "tools/README.md",
+      "message": "Document name already exists in repository."
+    }
+  ],
+  "warnings": [
+    {
+      "rule": "duplicate_similarity",
+      "path": "ARCHITECTURE_DECISIONS.md",
+      "message": "Document name similarity is 70.6% with existing name 'architecture'."
+    },
+    {
+      "rule": "duplicate_similarity",
+      "path": "BRANDING.md",
+      "message": "Document name similarity is 76.9% with existing name 'brand'."
+    },
+    {
+      "rule": "duplicate_similarity",
+      "path": "DEPENDENCIES.md",
+      "message": "Document name similarity is 78.6% with existing name 'dependency_links'."
+    },
+    {
+      "rule": "duplicate_similarity",
+      "path": "DEPENDENCY_POLICY.md",
+      "message": "Document name similarity is 78.8% with existing name 'dependency_links'."
+    },
+    {
+      "rule": "duplicate_similarity",
+      "path": "DEPLOYMENT.md",
+      "message": "Document name similarity is 75.0% with existing name 'deploy'."
+    },
+    {
+      "rule": "duplicate_similarity",
+      "path": "docs/README.md",
+      "message": "Document name similarity is 70.6% with existing name 'readme_diff'."
+    },
+    {
+      "rule": "duplicate_similarity",
+      "path": "scripts/README.md",
+      "message": "Document name similarity is 70.6% with existing name 'readme_diff'."
+    },
+    {
+      "rule": "duplicate_similarity",
+      "path": "tools/README.md",
+      "message": "Document name similarity is 70.6% with existing name 'readme_diff'."
+    }
+  ],
+  "tool_warnings": [],
+  "rules": {
+    "allowed_doc_locations": [
+      "docs/",
+      "docs/adr/",
+      "docs/runbooks/",
+      "docs/playbooks/",
+      "docs/security/",
+      "docs/architecture/",
+      "docs/releases/",
+      "docs/_generated/<RUN_ID>/"
+    ],
+    "allowed_root_docs": [
+      "CHANGELOG.md",
+      "CLA.md",
+      "CONTRIBUTING.md",
+      "LICENSE",
+      "NOTICE",
+      "README.md",
+      "SECURITY.md"
+    ],
+    "disallowed_dirs": [
+      "design_docs",
+      "docs2",
+      "documentation",
+      "notes",
+      "random_docs",
+      "wiki"
+    ],
+    "similarity_warn_threshold": 70.0,
+    "docs_max_depth": 5,
+    "max_new_docs": 50
+  }
+}

@@ -1,0 +1,1661 @@
+
+diff --git a/src/hitech_forms/ops/cli.py b/src/hitech_forms/ops/cli.py
+index eaa55ef..f467665 100644
+--- a/src/hitech_forms/ops/cli.py
++++ b/src/hitech_forms/ops/cli.py
+@@ -3,22 +3,57 @@ from __future__ import annotations
+ import os
+ import subprocess
+ import sys
++from pathlib import Path
+ 
+ import typer
+ 
+ from hitech_forms.db import session_scope
+ from hitech_forms.db.repositories import FormRepository, SubmissionRepository
+-from hitech_forms.platform.determinism import ensure_determinism_env
++from hitech_forms.ops.db import (
++    create_backup,
++    find_repo_root,
++    format_upgrade_failure,
++    inspect_sqlite_db,
++    render_doctor_report,
++    reset_sqlite_db,
++    resolve_repo_path,
++    stamp_head_strict,
++    summarize_report,
++    upgrade_to_head,
++)
++from hitech_forms.ops.db.alembic import AlembicCommandError
++from hitech_forms.ops.demo import run_demo_evidence
++from hitech_forms.ops.webhooks import webhooks_run_loop, webhooks_run_once
++from hitech_forms.platform.determinism import canonical_json_dumps, ensure_determinism_env
+ from hitech_forms.platform.settings import get_settings
+ from hitech_forms.services import ExportService, FormService
+ 
+ app = typer.Typer(add_completion=False, help="HITECH_FORMS CLI")
+ db = typer.Typer(add_completion=False, help="Database commands")
++webhooks = typer.Typer(add_completion=False, help="Webhook worker commands")
++demo = typer.Typer(add_completion=False, help="Deterministic demo tooling")
+ app.add_typer(db, name="db")
++app.add_typer(webhooks, name="webhooks")
++app.add_typer(demo, name="demo")
+ 
+ 
+-def _run(cmd: list[str], env: dict[str, str] | None = None) -> None:
+-    subprocess.run(cmd, check=True, env=env)
++def _run(cmd: list[str], env: dict[str, str] | None = None, cwd: Path | None = None) -> None:
++    subprocess.run(cmd, check=True, env=env, cwd=cwd or find_repo_root())
++
++
++def _raw_db_path_from_env() -> str:
++    return os.getenv("HFORMS_DB_PATH", "var/hitech_forms.db").strip() or "var/hitech_forms.db"
++
++
++def _resolved_db_path(repo_root: Path) -> Path:
++    return resolve_repo_path(_raw_db_path_from_env(), repo_root)
++
++
++def _echo_process_output(process: subprocess.CompletedProcess[str]) -> None:
++    if process.stdout.strip():
++        typer.echo(process.stdout.rstrip())
++    if process.stderr.strip():
++        typer.echo(process.stderr.rstrip(), err=True)
+ 
+ 
+ @app.command()
+@@ -33,15 +68,108 @@ def runserver(host: str | None = None, port: int | None = None) -> None:
+ 
+ @db.command("upgrade")
+ def db_upgrade() -> None:
+-    settings = get_settings()
+-    env = os.environ.copy()
+-    env["HFORMS_DB_PATH"] = settings.db_path
+-    _run(
+-        [sys.executable, "-m", "alembic", "-c", "migrations/alembic.ini", "upgrade", "head"],
+-        env=env,
++    repo_root = find_repo_root()
++    db_path = _resolved_db_path(repo_root)
++    try:
++        upgrade_to_head(repo_root=repo_root, db_path=db_path)
++    except AlembicCommandError as exc:
++        typer.secho(format_upgrade_failure(error=exc, db_path=db_path), fg=typer.colors.RED, err=True)
++        raise typer.Exit(code=1) from exc
++    typer.echo(f"db upgrade: upgraded to head ({db_path})")
++
++
++@db.command("doctor")
++def db_doctor(as_json: bool = typer.Option(False, "--json", help="Output canonical JSON report.")) -> None:
++    repo_root = find_repo_root()
++    report = inspect_sqlite_db(_raw_db_path_from_env(), repo_root=repo_root)
++    if as_json:
++        typer.echo(canonical_json_dumps(report.to_dict()))
++        return
++    typer.echo(render_doctor_report(report))
++
++
++@db.command("backup")
++def db_backup(
++    with_timestamp: bool = typer.Option(
++        False,
++        "--with-timestamp",
++        help="Append UTC epoch timestamp to backup filename (off by default).",
++    ),
++) -> None:
++    repo_root = find_repo_root()
++    db_path = _resolved_db_path(repo_root)
++    backup_dir = resolve_repo_path("var/backups", repo_root)
++    try:
++        result = create_backup(db_path=db_path, backup_dir=backup_dir, with_timestamp=with_timestamp)
++    except RuntimeError as exc:
++        typer.secho(str(exc), fg=typer.colors.RED, err=True)
++        raise typer.Exit(code=1) from exc
++    typer.echo(
++        canonical_json_dumps(
++            {
++                "source_db_path": result.source_db_path,
++                "backup_path": result.backup_path,
++                "with_timestamp": with_timestamp,
++            }
++        )
++    )
++
++
++@db.command("reset")
++def db_reset(
++    yes_i_know: bool = typer.Option(
++        False,
++        "--yes-i-know",
++        help="Required confirmation to allow local DB reset.",
++    ),
++) -> None:
++    repo_root = find_repo_root()
++    db_path = _resolved_db_path(repo_root)
++    try:
++        result = reset_sqlite_db(repo_root=repo_root, db_path=db_path, yes_i_know=yes_i_know)
++    except AlembicCommandError as exc:
++        typer.secho(format_upgrade_failure(error=exc, db_path=db_path), fg=typer.colors.RED, err=True)
++        raise typer.Exit(code=1) from exc
++    except RuntimeError as exc:
++        typer.secho(str(exc), fg=typer.colors.RED, err=True)
++        raise typer.Exit(code=1) from exc
++    typer.echo(
++        canonical_json_dumps(
++            {
++                "db_path": result.db_path,
++                "default_db_path": result.default_db_path,
++                "run_dir": result.run_dir,
++                "removed_existing_db": result.removed_existing_db,
++                "before_status": result.before_status,
++                "after_status": result.after_status,
++            }
++        )
+     )
+ 
+ 
++@db.command("stamp-head")
++def db_stamp_head() -> None:
++    repo_root = find_repo_root()
++    db_path = _resolved_db_path(repo_root)
++    try:
++        result = stamp_head_strict(repo_root=repo_root, db_path=db_path)
++    except AlembicCommandError as exc:
++        typer.secho(format_upgrade_failure(error=exc, db_path=db_path), fg=typer.colors.RED, err=True)
++        raise typer.Exit(code=1) from exc
++    except RuntimeError as exc:
++        typer.secho(
++            f"{exc}\nRun: python -m hitech_forms.ops.cli db doctor",
++            fg=typer.colors.RED,
++            err=True,
++        )
++        raise typer.Exit(code=1) from exc
++    typer.echo(canonical_json_dumps({"db_path": result.db_path, **summarize_report(inspect_sqlite_db(db_path))}))
++    if not result.stamped:
++        typer.echo("db stamp-head: already at head; no changes made.")
++    else:
++        typer.echo("db stamp-head: stamped alembic_version to head.")
++
++
+ @app.command("seed-demo")
+ def seed_demo() -> None:
+     with session_scope() as session:
+@@ -81,19 +209,51 @@ def export_csv(form_id: int, output: str, version: str = "v1") -> None:
+     typer.echo(f"export-csv: wrote {output}")
+ 
+ 
++@webhooks.command("run-once")
++def webhooks_run_once_cmd(limit: int = 50) -> None:
++    summary = webhooks_run_once(limit=limit)
++    typer.echo(canonical_json_dumps(summary))
++
++
++@webhooks.command("run-loop")
++def webhooks_run_loop_cmd(interval: int = 5, limit: int = 50) -> None:
++    try:
++        webhooks_run_loop(interval_seconds=interval, limit=limit)
++    except KeyboardInterrupt:
++        typer.echo("webhooks run-loop: stopped")
++
++
++@demo.command("run")
++def demo_run_cmd(
++    output_root: str = "var/demo_runs",
++    submissions: int = 5,
++    run_id: str | None = None,
++    with_timestamp: bool = False,
++    run_webhooks: bool = False,
++) -> None:
++    summary = run_demo_evidence(
++        output_root=output_root,
++        submissions=submissions,
++        run_id=run_id,
++        with_timestamp=with_timestamp,
++        run_webhooks=run_webhooks,
++    )
++    typer.echo(canonical_json_dumps(summary))
++
++
+ @app.command("quality-check")
+ def quality_check(with_coverage: bool = False) -> None:
+     ensure_determinism_env()
+-    _run([sys.executable, "-m", "ruff", "check", "."])
+-    _run([sys.executable, "-m", "mypy", "src"])
++    repo_root = find_repo_root()
++    _run([sys.executable, "-m", "ruff", "check", "."], cwd=repo_root)
++    _run([sys.executable, "-m", "mypy", "src"], cwd=repo_root)
+     pytest_cmd = [sys.executable, "-m", "pytest", "-q"]
+     if with_coverage:
+         pytest_cmd.extend(["--cov=src/hitech_forms", "--cov-report=term-missing"])
+-    _run(pytest_cmd)
++    _run(pytest_cmd, cwd=repo_root)
+ 
+ 
+ def main() -> None:
+-    get_settings()
+     app()
+ 
+ 
+diff --git a/docs/dev/DB_DRIFT_BLOCK_PLAN.md b/docs/dev/DB_DRIFT_BLOCK_PLAN.md
+new file mode 100644
+index 0000000..90a50a7
+--- /dev/null
++++ b/docs/dev/DB_DRIFT_BLOCK_PLAN.md
+@@ -0,0 +1,22 @@
++# DB Drift Block Plan
++
++## Scope
++- Harden local DB tooling for legacy SQLite drift while keeping production safety and deterministic behavior.
++- Keep migration source-of-truth in Alembic and avoid modifying existing migration files.
++
++## Findings from Intake
++- DB CLI entrypoint: `src/hitech_forms/ops/cli.py` (`db upgrade` currently shells out to Alembic).
++- Default DB path: `var/hitech_forms.db` via `HFORMS_DB_PATH` in `src/hitech_forms/platform/settings.py`.
++- Current `db upgrade` failure on legacy local DB emits raw subprocess exception behavior.
++
++## Implementation Plan (Tasks 2-10)
++1. Add dedicated DB inspector module (`src/hitech_forms/ops/db/doctor.py`) with deterministic structured diagnosis.
++2. Add `db doctor` CLI command with stable text output and canonical JSON output mode.
++3. Add `db backup` CLI command with deterministic monotonic filenames under `var/backups/`.
++4. Add `db reset --yes-i-know` CLI command (dev-only guard + explicit override env) with evidence logs.
++5. Add strict `db stamp-head` CLI command that only stamps when schema can be proven to match head.
++6. Improve `db upgrade` errors to point developers to `db doctor` with actionable recovery steps.
++7. Add deterministic unit tests for drift detection scenarios.
++8. Add integration tests for partial-schema (`submissions` missing) diagnosis and recommendations.
++9. Write `docs/dev/DB_DRIFT_PLAYBOOK.md` with symptoms, root cause, and safe recovery workflow.
++10. Run validation gates and publish final report + bundle artifacts for this block.
+diff --git a/docs/dev/DB_DRIFT_PLAYBOOK.md b/docs/dev/DB_DRIFT_PLAYBOOK.md
+new file mode 100644
+index 0000000..0ce214b
+--- /dev/null
++++ b/docs/dev/DB_DRIFT_PLAYBOOK.md
+@@ -0,0 +1,63 @@
++# DB Drift Playbook (Dev SQLite)
++
++## Problem Summary
++Legacy local SQLite files can drift away from Alembic state (for example: `alembic_version` says one revision, but core tables are missing). A common failure was:
++
++- `sqlite3.OperationalError: no such table: submissions`
++
++This playbook provides deterministic and safe local recovery commands.
++
++## Symptoms
++- `python -m hitech_forms.ops.cli db upgrade` fails on `var/hitech_forms.db`.
++- `alembic_version` exists but expected tables/columns are missing.
++- Partial schema exists (some of `forms/form_versions/fields/...` present, others absent).
++- SQLite file is corrupted/unreadable.
++
++## New Commands
++- DB commands resolve `HFORMS_DB_PATH` directly and are usable even if app-level admin token config is not set.
++- Diagnose only (no destructive action):
++  - `python -m hitech_forms.ops.cli db doctor`
++  - JSON mode: `python -m hitech_forms.ops.cli db doctor --json`
++- Deterministic backup:
++  - `python -m hitech_forms.ops.cli db backup`
++  - filenames: `backup_001.db`, `backup_002.db`, ...
++  - optional timestamp suffix: `--with-timestamp`
++- Strict Alembic stamp:
++  - `python -m hitech_forms.ops.cli db stamp-head`
++  - only allowed when schema can be proven to match head.
++- Dev-only reset:
++  - `python -m hitech_forms.ops.cli db reset --yes-i-know`
++  - requires `HFORMS_ENV=dev` or `HFORMS_ALLOW_DB_RESET=1`
++  - default path protection: reset targets `var/hitech_forms.db` unless explicit override env is set.
++
++## Safe Recovery Workflow
++1. Run diagnosis:
++   - `python -m hitech_forms.ops.cli db doctor`
++2. If drift/corruption is detected, backup first:
++   - `python -m hitech_forms.ops.cli db backup`
++3. If doctor says schema matches head but Alembic version is missing/mismatched:
++   - `python -m hitech_forms.ops.cli db stamp-head`
++4. If doctor reports partial schema or missing core tables:
++   - `HFORMS_ENV=dev python -m hitech_forms.ops.cli db reset --yes-i-know`
++5. Re-run doctor to confirm:
++   - `python -m hitech_forms.ops.cli db doctor`
++
++## Reproducing Legacy Failure (Reference)
++1. Use a drifted local DB where `submissions` table is missing but migration chain expects it.
++2. Run:
++   - `python -m hitech_forms.ops.cli db upgrade`
++3. Expected message now:
++   - clean failure summary
++   - points to `python -m hitech_forms.ops.cli db doctor`
++   - recommends backup/reset actions
++
++## Determinism and Safety Notes
++- Keep `PYTHONHASHSEED=0`.
++- Keep timezone UTC (`HFORMS_TIMEZONE=UTC`).
++- No auto-delete behavior exists: reset requires explicit `--yes-i-know`.
++- Alembic remains source of truth; existing migration files are not rewritten.
++
++## What Not To Do
++- Do not blindly `stamp head` unless doctor indicates schema/head match.
++- Do not delete SQLite DB without backup when data must be preserved.
++- Do not edit historical migrations to paper over local drift.
+diff --git a/docs/dev/FINAL_REPORT_BLOCK_DB_DRIFT.md b/docs/dev/FINAL_REPORT_BLOCK_DB_DRIFT.md
+new file mode 100644
+index 0000000..57315ff
+--- /dev/null
++++ b/docs/dev/FINAL_REPORT_BLOCK_DB_DRIFT.md
+@@ -0,0 +1,95 @@
++# FINAL REPORT: BLOCK_DB_DRIFT
++
++## 1) Summary
++- Added a dedicated DB drift inspector module for SQLite (`src/hitech_forms/ops/db/doctor.py`) with deterministic structured output.
++- Added safe recovery tooling (`backup`, `reset`, `stamp-head`) in `src/hitech_forms/ops/db/recovery.py`.
++- Added new DB CLI commands:
++  - `db doctor`
++  - `db backup`
++  - `db reset --yes-i-know`
++  - `db stamp-head`
++- DB CLI path handling now resolves `HFORMS_DB_PATH` directly; DB commands no longer require admin-token settings validation just to diagnose/recover schema drift.
++- Hardened `db upgrade` failure handling to show actionable guidance (including `db doctor`) instead of raw stack traces.
++- Added deterministic unit/integration tests for drift detection and upgrade error messaging.
++- Added developer playbook: `docs/dev/DB_DRIFT_PLAYBOOK.md`.
++
++## 2) New Commands & Flags
++- `python -m hitech_forms.ops.cli db doctor`
++  - `--json`: canonical JSON output.
++- `python -m hitech_forms.ops.cli db backup`
++  - default deterministic names: `backup_001.db`, `backup_002.db`, ...
++  - `--with-timestamp`: optional timestamp suffix.
++- `python -m hitech_forms.ops.cli db reset --yes-i-know`
++  - guard rails:
++    - allowed only when `HFORMS_ENV=dev` OR `HFORMS_ALLOW_DB_RESET=1`
++    - requires explicit `--yes-i-know`
++    - restricted to default DB path unless explicit override env is set.
++  - emits run artifacts under `var/db_reset_runs/run-XXXX/`.
++- `python -m hitech_forms.ops.cli db stamp-head`
++  - strict mode:
++    - only stamps when schema matches Alembic head checks.
++    - refuses otherwise and points to doctor/recovery.
++
++## 3) How To Reproduce Old Failure
++1. Use drifted default DB (`var/hitech_forms.db`) where `submissions` table is missing.
++2. Run:
++   - `python -m hitech_forms.ops.cli db upgrade`
++3. Current behavior (improved):
++   - clean error summary, including:
++     - `sqlite3.OperationalError: no such table: submissions`
++     - `Run: python -m hitech_forms.ops.cli db doctor`
++     - recommended next steps (`db backup`, `db reset --yes-i-know` in dev).
++
++## 4) How To Recover Safely
++1. Diagnose:
++   - `python -m hitech_forms.ops.cli db doctor`
++2. Backup:
++   - `python -m hitech_forms.ops.cli db backup`
++3. If doctor says schema==head but version drift exists:
++   - `python -m hitech_forms.ops.cli db stamp-head`
++4. If partial schema/missing core tables:
++   - `HFORMS_ENV=dev python -m hitech_forms.ops.cli db reset --yes-i-know`
++5. Verify:
++   - `python -m hitech_forms.ops.cli db doctor`
++
++## 5) Tests + Results
++Executed from `F:\repos\HITECH_FORMS` using `.venv\Scripts\python.exe` with `PYTHONHASHSEED=0`:
++
++- `python -m hitech_forms.ops.cli db doctor`
++  - Pass (diagnoses legacy drift and recommends backup/reset).
++- `python -m hitech_forms.ops.cli db upgrade` (default path)
++  - Expected fail on existing drifted DB.
++  - Pass criteria met: emits helpful guidance and `db doctor` pointer, no raw traceback.
++- `python -m hitech_forms.ops.cli quality-check`
++  - Pass.
++- `pytest -q`
++  - Pass (`39 passed`).
++- `pytest -q tests/e2e -k smoke`
++  - Pass (`2 passed`).
++
++New test coverage added:
++- `tests/unit/test_db_doctor.py`
++- `tests/unit/test_db_recovery.py`
++- `tests/unit/test_db_upgrade_error_message.py`
++- `tests/integration/test_db_drift_doctor.py`
++
++## 6) Files Changed List
++Created:
++- `docs/dev/DB_DRIFT_BLOCK_PLAN.md`
++- `docs/dev/DB_DRIFT_PLAYBOOK.md`
++- `docs/dev/FINAL_REPORT_BLOCK_DB_DRIFT.md`
++- `src/hitech_forms/ops/db/__init__.py`
++- `src/hitech_forms/ops/db/alembic.py`
++- `src/hitech_forms/ops/db/doctor.py`
++- `src/hitech_forms/ops/db/paths.py`
++- `src/hitech_forms/ops/db/recovery.py`
++- `tests/integration/test_db_drift_doctor.py`
++- `tests/unit/test_db_doctor.py`
++- `tests/unit/test_db_recovery.py`
++- `tests/unit/test_db_upgrade_error_message.py`
++- `tools/codex/BUNDLES/BLOCK_DB_DRIFT/STATUS.json`
++- `tools/codex/BUNDLES/BLOCK_DB_DRIFT/FILES_CHANGED.json`
++- `tools/codex/BUNDLES/BLOCK_DB_DRIFT/DIFF.patch`
++
++Modified:
++- `src/hitech_forms/ops/cli.py`
+diff --git a/src/hitech_forms/ops/db/__init__.py b/src/hitech_forms/ops/db/__init__.py
+new file mode 100644
+index 0000000..0e31c9d
+--- /dev/null
++++ b/src/hitech_forms/ops/db/__init__.py
+@@ -0,0 +1,33 @@
++from hitech_forms.ops.db.doctor import (
++    DoctorReport,
++    detect_drift_scenarios,
++    inspect_sqlite_db,
++    render_doctor_report,
++)
++from hitech_forms.ops.db.paths import DEFAULT_DB_RELATIVE_PATH, find_repo_root, resolve_repo_path
++from hitech_forms.ops.db.recovery import (
++    create_backup,
++    format_upgrade_failure,
++    is_reset_allowed,
++    reset_sqlite_db,
++    stamp_head_strict,
++    summarize_report,
++    upgrade_to_head,
++)
++
++__all__ = [
++    "DEFAULT_DB_RELATIVE_PATH",
++    "DoctorReport",
++    "create_backup",
++    "detect_drift_scenarios",
++    "find_repo_root",
++    "format_upgrade_failure",
++    "inspect_sqlite_db",
++    "is_reset_allowed",
++    "render_doctor_report",
++    "reset_sqlite_db",
++    "resolve_repo_path",
++    "stamp_head_strict",
++    "summarize_report",
++    "upgrade_to_head",
++]
+diff --git a/src/hitech_forms/ops/db/alembic.py b/src/hitech_forms/ops/db/alembic.py
+new file mode 100644
+index 0000000..a6a8741
+--- /dev/null
++++ b/src/hitech_forms/ops/db/alembic.py
+@@ -0,0 +1,61 @@
++from __future__ import annotations
++
++import os
++import subprocess
++import sys
++from collections.abc import Sequence
++from pathlib import Path
++
++
++class AlembicCommandError(RuntimeError):
++    def __init__(
++        self,
++        *,
++        command: list[str],
++        return_code: int,
++        stdout: str,
++        stderr: str,
++    ) -> None:
++        super().__init__(f"Alembic command failed with exit code {return_code}.")
++        self.command = tuple(command)
++        self.return_code = return_code
++        self.stdout = stdout
++        self.stderr = stderr
++
++
++def run_alembic_command(
++    *,
++    repo_root: Path,
++    db_path: Path,
++    args: Sequence[str],
++) -> subprocess.CompletedProcess[str]:
++    alembic_ini = repo_root / "migrations" / "alembic.ini"
++    cmd = [
++        sys.executable,
++        "-m",
++        "alembic",
++        "-c",
++        str(alembic_ini),
++        *args,
++    ]
++    env = os.environ.copy()
++    env["HFORMS_DB_PATH"] = str(db_path)
++    env.setdefault("HFORMS_ADMIN_TOKEN", "db-ops-token")
++    env.setdefault("HFORMS_TIMEZONE", "UTC")
++    env.setdefault("PYTHONHASHSEED", "0")
++    process = subprocess.run(
++        cmd,
++        cwd=repo_root,
++        env=env,
++        capture_output=True,
++        text=True,
++        check=False,
++    )
++    if process.returncode != 0:
++        raise AlembicCommandError(
++            command=cmd,
++            return_code=process.returncode,
++            stdout=process.stdout,
++            stderr=process.stderr,
++        )
++    return process
+diff --git a/src/hitech_forms/ops/db/doctor.py b/src/hitech_forms/ops/db/doctor.py
+new file mode 100644
+index 0000000..f9d9e4d
+--- /dev/null
++++ b/src/hitech_forms/ops/db/doctor.py
+@@ -0,0 +1,542 @@
++from __future__ import annotations
++
++import sqlite3
++from dataclasses import dataclass
++from pathlib import Path
++from typing import Any
++
++from alembic.config import Config
++from alembic.script import ScriptDirectory
++
++from hitech_forms.ops.db.paths import DEFAULT_DB_RELATIVE_PATH, find_repo_root, resolve_repo_path
++
++CORE_TABLES: tuple[str, ...] = (
++    "forms",
++    "form_versions",
++    "fields",
++    "submissions",
++    "answers",
++)
++
++EXPECTED_TABLE_COLUMNS: dict[str, tuple[str, ...]] = {
++    "forms": ("id", "title", "slug", "status", "active_version_id", "created_at", "updated_at"),
++    "form_versions": ("id", "form_id", "version_number", "status", "created_at", "published_at"),
++    "fields": (
++        "form_version_id",
++        "id",
++        "field_key",
++        "label",
++        "type",
++        "required",
++        "position",
++        "config_json",
++        "created_at",
++    ),
++    "submissions": ("id", "form_id", "form_version_id", "created_at", "submission_seq"),
++    "answers": ("id", "submission_id", "field_key", "value_text", "created_at"),
++    "webhook_outbox": (
++        "id",
++        "created_at",
++        "next_attempt_at",
++        "attempt_count",
++        "status",
++        "target_url",
++        "payload_json",
++        "payload_sha256",
++        "idempotency_key",
++        "form_id",
++        "form_version_id",
++        "submission_id",
++        "last_error",
++        "delivered_at",
++    ),
++    "webhook_delivery_log": (
++        "id",
++        "outbox_id",
++        "attempt_no",
++        "attempted_at",
++        "http_status",
++        "response_snippet",
++        "error_type",
++        "error_message",
++    ),
++}
++EXPECTED_TABLES: tuple[str, ...] = tuple(EXPECTED_TABLE_COLUMNS.keys())
++
++
++@dataclass(frozen=True)
++class TableMismatch:
++    table: str
++    missing_columns: tuple[str, ...]
++
++    def to_dict(self) -> dict[str, Any]:
++        return {
++            "table": self.table,
++            "missing_columns": list(self.missing_columns),
++        }
++
++
++@dataclass(frozen=True)
++class DriftIssue:
++    code: str
++    severity: str
++    message: str
++
++    def to_dict(self) -> dict[str, str]:
++        return {"code": self.code, "severity": self.severity, "message": self.message}
++
++
++@dataclass(frozen=True)
++class AlembicCheck:
++    table_exists: bool
++    versions: tuple[str, ...]
++    version_matches_head: bool
++
++
++@dataclass(frozen=True)
++class ExpectedTablesCheck:
++    missing_tables: tuple[str, ...]
++    missing_core_tables: tuple[str, ...]
++    partial_schema: bool
++    table_mismatches: tuple[TableMismatch, ...]
++    schema_matches_head: bool
++
++
++@dataclass(frozen=True)
++class DoctorReport:
++    db_path_input: str
++    db_path_resolved: str
++    default_db_path: str
++    db_exists: bool
++    sqlite_readable: bool
++    sqlite_corrupted: bool
++    error: str | None
++    alembic_head: str
++    alembic_version_table_exists: bool
++    alembic_versions: tuple[str, ...]
++    tables_present: tuple[str, ...]
++    expected_tables: tuple[str, ...]
++    missing_tables: tuple[str, ...]
++    missing_core_tables: tuple[str, ...]
++    partial_schema: bool
++    table_mismatches: tuple[TableMismatch, ...]
++    schema_matches_head: bool
++    version_matches_head: bool
++    issues: tuple[DriftIssue, ...]
++    recommendations: tuple[str, ...]
++    status: str
++
++    def to_dict(self) -> dict[str, Any]:
++        return {
++            "status": self.status,
++            "db_path_input": self.db_path_input,
++            "db_path_resolved": self.db_path_resolved,
++            "default_db_path": self.default_db_path,
++            "db_exists": self.db_exists,
++            "sqlite_readable": self.sqlite_readable,
++            "sqlite_corrupted": self.sqlite_corrupted,
++            "error": self.error,
++            "alembic_head": self.alembic_head,
++            "alembic_version_table_exists": self.alembic_version_table_exists,
++            "alembic_versions": list(self.alembic_versions),
++            "tables_present": list(self.tables_present),
++            "expected_tables": list(self.expected_tables),
++            "missing_tables": list(self.missing_tables),
++            "missing_core_tables": list(self.missing_core_tables),
++            "partial_schema": self.partial_schema,
++            "table_mismatches": [item.to_dict() for item in self.table_mismatches],
++            "schema_matches_head": self.schema_matches_head,
++            "version_matches_head": self.version_matches_head,
++            "issues": [issue.to_dict() for issue in self.issues],
++            "recommendations": list(self.recommendations),
++        }
++
++
++def open_db(path: Path) -> sqlite3.Connection:
++    return sqlite3.connect(str(path))
++
++
++def list_tables(connection: sqlite3.Connection) -> tuple[str, ...]:
++    rows = connection.execute(
++        "SELECT name FROM sqlite_master WHERE type='table' ORDER BY name ASC"
++    ).fetchall()
++    return tuple(str(row[0]) for row in rows)
++
++
++def _list_columns(connection: sqlite3.Connection, table_name: str) -> tuple[str, ...]:
++    rows = connection.execute(f'PRAGMA table_info("{table_name}")').fetchall()
++    return tuple(sorted(str(row[1]) for row in rows))
++
++
++def check_alembic_version(
++    connection: sqlite3.Connection,
++    *,
++    table_names: tuple[str, ...],
++    alembic_head: str,
++) -> AlembicCheck:
++    table_exists = "alembic_version" in table_names
++    if not table_exists:
++        return AlembicCheck(table_exists=False, versions=(), version_matches_head=False)
++    rows = connection.execute(
++        "SELECT version_num FROM alembic_version ORDER BY version_num ASC"
++    ).fetchall()
++    versions = tuple(str(row[0]) for row in rows if row and row[0] is not None)
++    version_matches_head = len(versions) == 1 and versions[0] == alembic_head
++    return AlembicCheck(
++        table_exists=table_exists,
++        versions=versions,
++        version_matches_head=version_matches_head,
++    )
++
++
++def check_expected_tables(
++    connection: sqlite3.Connection,
++    *,
++    table_names: tuple[str, ...],
++) -> ExpectedTablesCheck:
++    present_set = set(table_names)
++    missing_tables = tuple(table for table in EXPECTED_TABLES if table not in present_set)
++    missing_core_tables = tuple(table for table in CORE_TABLES if table not in present_set)
++    present_expected_tables = tuple(table for table in EXPECTED_TABLES if table in present_set)
++    partial_schema = bool(present_expected_tables) and bool(missing_tables)
++
++    mismatches: list[TableMismatch] = []
++    for table_name in present_expected_tables:
++        columns = set(_list_columns(connection, table_name))
++        missing_columns = tuple(
++            column for column in EXPECTED_TABLE_COLUMNS[table_name] if column not in columns
++        )
++        if missing_columns:
++            mismatches.append(TableMismatch(table=table_name, missing_columns=missing_columns))
++
++    table_mismatches = tuple(mismatches)
++    schema_matches_head = not missing_tables and not table_mismatches
++    return ExpectedTablesCheck(
++        missing_tables=missing_tables,
++        missing_core_tables=missing_core_tables,
++        partial_schema=partial_schema,
++        table_mismatches=table_mismatches,
++        schema_matches_head=schema_matches_head,
++    )
++
++
++def detect_drift_scenarios(
++    *,
++    db_exists: bool,
++    sqlite_readable: bool,
++    sqlite_corrupted: bool,
++    error: str | None,
++    alembic_version_table_exists: bool,
++    alembic_versions: tuple[str, ...],
++    missing_tables: tuple[str, ...],
++    partial_schema: bool,
++    table_mismatches: tuple[TableMismatch, ...],
++    schema_matches_head: bool,
++    version_matches_head: bool,
++) -> tuple[DriftIssue, ...]:
++    issues: list[DriftIssue] = []
++    if not db_exists:
++        issues.append(
++            DriftIssue(
++                code="db_file_missing",
++                severity="warn",
++                message="Database file does not exist yet.",
++            )
++        )
++        return tuple(issues)
++
++    if sqlite_corrupted:
++        issues.append(
++            DriftIssue(
++                code="db_corrupted",
++                severity="error",
++                message=error or "SQLite quick_check failed.",
++            )
++        )
++        return tuple(issues)
++
++    if not sqlite_readable:
++        issues.append(
++            DriftIssue(
++                code="db_unreadable",
++                severity="error",
++                message=error or "Database file exists but could not be opened.",
++            )
++        )
++        return tuple(issues)
++
++    if not alembic_version_table_exists:
++        issues.append(
++            DriftIssue(
++                code="missing_alembic_version_table",
++                severity="warn",
++                message="alembic_version table is missing.",
++            )
++        )
++
++    if missing_tables:
++        issues.append(
++            DriftIssue(
++                code="missing_expected_tables",
++                severity="error",
++                message=f"Missing expected tables: {', '.join(missing_tables)}",
++            )
++        )
++
++    if partial_schema:
++        issues.append(
++            DriftIssue(
++                code="partial_schema_detected",
++                severity="error",
++                message="Only part of the expected schema is present.",
++            )
++        )
++
++    if table_mismatches:
++        issues.append(
++            DriftIssue(
++                code="table_column_mismatch",
++                severity="error",
++                message="One or more tables are missing required columns.",
++            )
++        )
++
++    if alembic_version_table_exists and not version_matches_head:
++        version_label = ", ".join(alembic_versions) if alembic_versions else "<none>"
++        issues.append(
++            DriftIssue(
++                code="alembic_head_mismatch",
++                severity="warn",
++                message=f"alembic_version is not at head: {version_label}",
++            )
++        )
++
++    if version_matches_head and not schema_matches_head:
++        issues.append(
++            DriftIssue(
++                code="alembic_claims_head_but_schema_differs",
++                severity="error",
++                message="alembic_version reports head but schema does not match expected head state.",
++            )
++        )
++
++    if schema_matches_head and not version_matches_head:
++        issues.append(
++            DriftIssue(
++                code="schema_matches_head_but_alembic_version_differs",
++                severity="warn",
++                message="Schema matches head but alembic_version is missing or mismatched.",
++            )
++        )
++
++    return tuple(issues)
++
++
++def _dedupe_keep_order(items: list[str]) -> tuple[str, ...]:
++    deduped: list[str] = []
++    seen: set[str] = set()
++    for item in items:
++        if item in seen:
++            continue
++        deduped.append(item)
++        seen.add(item)
++    return tuple(deduped)
++
++
++def _build_recommendations(report: DoctorReport) -> tuple[str, ...]:
++    actions: list[str] = []
++    if not report.db_exists:
++        actions.append("Run: python -m hitech_forms.ops.cli db upgrade")
++        return tuple(actions)
++
++    if not report.sqlite_readable or report.sqlite_corrupted:
++        actions.append("Run: python -m hitech_forms.ops.cli db backup")
++        actions.append("Run: HFORMS_ENV=dev python -m hitech_forms.ops.cli db reset --yes-i-know")
++        return _dedupe_keep_order(actions)
++
++    if report.partial_schema or report.missing_core_tables:
++        actions.append("Run: python -m hitech_forms.ops.cli db backup")
++        actions.append("Run: HFORMS_ENV=dev python -m hitech_forms.ops.cli db reset --yes-i-know")
++
++    if report.schema_matches_head and not report.version_matches_head:
++        actions.append("Run: python -m hitech_forms.ops.cli db stamp-head")
++
++    if report.missing_tables and not report.partial_schema:
++        actions.append("Run: python -m hitech_forms.ops.cli db upgrade")
++
++    if not actions:
++        actions.append("No action required.")
++
++    return _dedupe_keep_order(actions)
++
++
++def _status_from_issues(issues: tuple[DriftIssue, ...]) -> str:
++    if not issues:
++        return "ok"
++    if any(issue.severity == "error" for issue in issues):
++        return "error"
++    return "warn"
++
++
++def _get_alembic_head(repo_root: Path) -> str:
++    config = Config(str(repo_root / "migrations" / "alembic.ini"))
++    config.set_main_option("script_location", str(repo_root / "migrations"))
++    script = ScriptDirectory.from_config(config)
++    heads = tuple(sorted(script.get_heads()))
++    if not heads:
++        return ""
++    if len(heads) == 1:
++        return heads[0]
++    return ",".join(heads)
++
++
++def inspect_sqlite_db(
++    db_path: str | Path,
++    *,
++    repo_root: Path | None = None,
++) -> DoctorReport:
++    effective_repo_root = repo_root or find_repo_root()
++    db_path_resolved = resolve_repo_path(db_path, effective_repo_root)
++    default_db_path = resolve_repo_path(DEFAULT_DB_RELATIVE_PATH, effective_repo_root)
++    alembic_head = _get_alembic_head(effective_repo_root)
++
++    db_exists = db_path_resolved.exists()
++    sqlite_readable = False
++    sqlite_corrupted = False
++    error: str | None = None
++    tables_present: tuple[str, ...] = ()
++    alembic_check = AlembicCheck(table_exists=False, versions=(), version_matches_head=False)
++    expected_check = ExpectedTablesCheck(
++        missing_tables=EXPECTED_TABLES,
++        missing_core_tables=CORE_TABLES,
++        partial_schema=False,
++        table_mismatches=(),
++        schema_matches_head=False,
++    )
++
++    if db_exists and not db_path_resolved.is_file():
++        error = "Database path exists but is not a file."
++    elif db_exists:
++        connection: sqlite3.Connection | None = None
++        try:
++            connection = open_db(db_path_resolved)
++            quick_check_rows = connection.execute("PRAGMA quick_check").fetchall()
++            quick_check_values = tuple(str(row[0]) for row in quick_check_rows if row and row[0] is not None)
++            if not quick_check_values or any(value.lower() != "ok" for value in quick_check_values):
++                sqlite_corrupted = True
++                error = "; ".join(quick_check_values) if quick_check_values else "quick_check returned no rows"
++            else:
++                sqlite_readable = True
++                tables_present = list_tables(connection)
++                alembic_check = check_alembic_version(
++                    connection,
++                    table_names=tables_present,
++                    alembic_head=alembic_head,
++                )
++                expected_check = check_expected_tables(connection, table_names=tables_present)
++        except sqlite3.DatabaseError as exc:
++            sqlite_corrupted = True
++            error = str(exc)
++        except sqlite3.Error as exc:
++            error = str(exc)
++        finally:
++            if connection is not None:
++                connection.close()
++
++    issues = detect_drift_scenarios(
++        db_exists=db_exists,
++        sqlite_readable=sqlite_readable,
++        sqlite_corrupted=sqlite_corrupted,
++        error=error,
++        alembic_version_table_exists=alembic_check.table_exists,
++        alembic_versions=alembic_check.versions,
++        missing_tables=expected_check.missing_tables,
++        partial_schema=expected_check.partial_schema,
++        table_mismatches=expected_check.table_mismatches,
++        schema_matches_head=expected_check.schema_matches_head,
++        version_matches_head=alembic_check.version_matches_head,
++    )
++    provisional_report = DoctorReport(
++        db_path_input=str(db_path),
++        db_path_resolved=str(db_path_resolved),
++        default_db_path=str(default_db_path),
++        db_exists=db_exists,
++        sqlite_readable=sqlite_readable,
++        sqlite_corrupted=sqlite_corrupted,
++        error=error,
++        alembic_head=alembic_head,
++        alembic_version_table_exists=alembic_check.table_exists,
++        alembic_versions=alembic_check.versions,
++        tables_present=tables_present,
++        expected_tables=EXPECTED_TABLES,
++        missing_tables=expected_check.missing_tables,
++        missing_core_tables=expected_check.missing_core_tables,
++        partial_schema=expected_check.partial_schema,
++        table_mismatches=expected_check.table_mismatches,
++        schema_matches_head=expected_check.schema_matches_head,
++        version_matches_head=alembic_check.version_matches_head,
++        issues=issues,
++        recommendations=(),
++        status=_status_from_issues(issues),
++    )
++    recommendations = _build_recommendations(provisional_report)
++    return DoctorReport(
++        db_path_input=provisional_report.db_path_input,
++        db_path_resolved=provisional_report.db_path_resolved,
++        default_db_path=provisional_report.default_db_path,
++        db_exists=provisional_report.db_exists,
++        sqlite_readable=provisional_report.sqlite_readable,
++        sqlite_corrupted=provisional_report.sqlite_corrupted,
++        error=provisional_report.error,
++        alembic_head=provisional_report.alembic_head,
++        alembic_version_table_exists=provisional_report.alembic_version_table_exists,
++        alembic_versions=provisional_report.alembic_versions,
++        tables_present=provisional_report.tables_present,
++        expected_tables=provisional_report.expected_tables,
++        missing_tables=provisional_report.missing_tables,
++        missing_core_tables=provisional_report.missing_core_tables,
++        partial_schema=provisional_report.partial_schema,
++        table_mismatches=provisional_report.table_mismatches,
++        schema_matches_head=provisional_report.schema_matches_head,
++        version_matches_head=provisional_report.version_matches_head,
++        issues=provisional_report.issues,
++        recommendations=recommendations,
++        status=provisional_report.status,
++    )
++
++
++def render_doctor_report(report: DoctorReport) -> str:
++    lines = [
++        f"status: {report.status}",
++        f"db_path_input: {report.db_path_input}",
++        f"db_path_resolved: {report.db_path_resolved}",
++        f"default_db_path: {report.default_db_path}",
++        f"db_exists: {str(report.db_exists).lower()}",
++        f"sqlite_readable: {str(report.sqlite_readable).lower()}",
++        f"sqlite_corrupted: {str(report.sqlite_corrupted).lower()}",
++        f"alembic_head: {report.alembic_head}",
++        f"alembic_version_table_exists: {str(report.alembic_version_table_exists).lower()}",
++        f"alembic_versions: {', '.join(report.alembic_versions) if report.alembic_versions else '<none>'}",
++        f"tables_present: {', '.join(report.tables_present) if report.tables_present else '<none>'}",
++        f"missing_tables: {', '.join(report.missing_tables) if report.missing_tables else '<none>'}",
++        f"missing_core_tables: {', '.join(report.missing_core_tables) if report.missing_core_tables else '<none>'}",
++        f"partial_schema: {str(report.partial_schema).lower()}",
++        f"schema_matches_head: {str(report.schema_matches_head).lower()}",
++        f"version_matches_head: {str(report.version_matches_head).lower()}",
++    ]
++    if report.error:
++        lines.append(f"error: {report.error}")
++    lines.append("issues:")
++    if report.issues:
++        for issue in report.issues:
++            lines.append(f"- [{issue.severity}] {issue.code}: {issue.message}")
++    else:
++        lines.append("- none")
++    if report.table_mismatches:
++        lines.append("table_mismatches:")
++        for mismatch in report.table_mismatches:
++            lines.append(f"- {mismatch.table}: missing columns {', '.join(mismatch.missing_columns)}")
++    lines.append("recommended_actions:")
++    for index, action in enumerate(report.recommendations, start=1):
++        lines.append(f"{index}. {action}")
++    return "\n".join(lines)
+diff --git a/src/hitech_forms/ops/db/paths.py b/src/hitech_forms/ops/db/paths.py
+new file mode 100644
+index 0000000..26613d3
+--- /dev/null
++++ b/src/hitech_forms/ops/db/paths.py
+@@ -0,0 +1,34 @@
++from __future__ import annotations
++
++from pathlib import Path
++
++DEFAULT_DB_RELATIVE_PATH = Path("var/hitech_forms.db")
++
++
++def _is_repo_root(path: Path) -> bool:
++    return (path / "pyproject.toml").is_file() and (path / "src" / "hitech_forms").is_dir()
++
++
++def find_repo_root(start: Path | None = None) -> Path:
++    search_roots: list[Path] = []
++    if start is not None:
++        search_roots.append(start.resolve())
++    search_roots.append(Path.cwd().resolve())
++    search_roots.append(Path(__file__).resolve())
++
++    visited: set[Path] = set()
++    for root in search_roots:
++        for candidate in [root, *root.parents]:
++            if candidate in visited:
++                continue
++            visited.add(candidate)
++            if _is_repo_root(candidate):
++                return candidate
++    raise RuntimeError("Unable to locate repository root (expected pyproject.toml + src/hitech_forms).")
++
++
++def resolve_repo_path(path_value: str | Path, repo_root: Path) -> Path:
++    candidate = Path(path_value)
++    if candidate.is_absolute():
++        return candidate.resolve()
++    return (repo_root / candidate).resolve()
+diff --git a/src/hitech_forms/ops/db/recovery.py b/src/hitech_forms/ops/db/recovery.py
+new file mode 100644
+index 0000000..c901e6e
+--- /dev/null
++++ b/src/hitech_forms/ops/db/recovery.py
+@@ -0,0 +1,260 @@
++from __future__ import annotations
++
++import os
++import re
++import shutil
++from dataclasses import dataclass
++from pathlib import Path
++from typing import Any
++
++from hitech_forms.ops.db.alembic import AlembicCommandError, run_alembic_command
++from hitech_forms.ops.db.doctor import DoctorReport, inspect_sqlite_db
++from hitech_forms.ops.db.paths import DEFAULT_DB_RELATIVE_PATH, resolve_repo_path
++from hitech_forms.platform.determinism import canonical_json_dumps, utc_now_epoch
++
++BACKUP_PATTERN = re.compile(r"^backup_(\d+)(?:_ts_\d+)?\.db$")
++RESET_RUN_PATTERN = re.compile(r"^run-(\d{4})$")
++
++
++@dataclass(frozen=True)
++class BackupResult:
++    source_db_path: str
++    backup_path: str
++
++
++@dataclass(frozen=True)
++class ResetResult:
++    db_path: str
++    default_db_path: str
++    run_dir: str
++    removed_existing_db: bool
++    before_status: str
++    after_status: str
++
++
++@dataclass(frozen=True)
++class StampResult:
++    db_path: str
++    stamped: bool
++    reason: str
++    before_status: str
++    after_status: str
++
++
++def _next_backup_index(backup_dir: Path) -> int:
++    existing: list[int] = []
++    if backup_dir.exists():
++        for child in backup_dir.iterdir():
++            if not child.is_file():
++                continue
++            match = BACKUP_PATTERN.match(child.name)
++            if match:
++                existing.append(int(match.group(1)))
++    return (max(existing) if existing else 0) + 1
++
++
++def _next_reset_run_name(root: Path) -> str:
++    existing: list[int] = []
++    if root.exists():
++        for child in root.iterdir():
++            if not child.is_dir():
++                continue
++            match = RESET_RUN_PATTERN.match(child.name)
++            if match:
++                existing.append(int(match.group(1)))
++    next_id = (max(existing) if existing else 0) + 1
++    return f"run-{next_id:04d}"
++
++
++def _write_canonical_json(path: Path, payload: dict[str, Any]) -> None:
++    path.write_text(canonical_json_dumps(payload) + "\n", encoding="utf-8")
++
++
++def _append_event(path: Path, event: str, **fields: Any) -> None:
++    payload = {"event": event, "ts": utc_now_epoch(), **fields}
++    with path.open("a", encoding="utf-8") as handle:
++        handle.write(canonical_json_dumps(payload))
++        handle.write("\n")
++
++
++def create_backup(*, db_path: Path, backup_dir: Path, with_timestamp: bool = False) -> BackupResult:
++    if not db_path.exists():
++        raise RuntimeError(f"Database file does not exist: {db_path}")
++    if not db_path.is_file():
++        raise RuntimeError(f"Database path is not a file: {db_path}")
++
++    backup_dir.mkdir(parents=True, exist_ok=True)
++    next_index = _next_backup_index(backup_dir)
++    backup_name = f"backup_{next_index:03d}.db"
++    if with_timestamp:
++        backup_name = f"backup_{next_index:03d}_ts_{utc_now_epoch()}.db"
++    destination = (backup_dir / backup_name).resolve()
++    shutil.copyfile(db_path, destination)
++    return BackupResult(source_db_path=str(db_path), backup_path=str(destination))
++
++
++def upgrade_to_head(*, repo_root: Path, db_path: Path) -> None:
++    run_alembic_command(repo_root=repo_root, db_path=db_path, args=("upgrade", "head"))
++
++
++def format_upgrade_failure(*, error: AlembicCommandError, db_path: Path) -> str:
++    stderr = error.stderr.strip()
++    stdout = error.stdout.strip()
++    detail_blob = stderr or stdout
++    detail_line = ""
++    if detail_blob:
++        lines = [line.strip() for line in detail_blob.splitlines() if line.strip()]
++        preferred_tokens = ("no such table", "operationalerror", "sqlite3.", "sqlalchemy.exc")
++        for token in preferred_tokens:
++            matched = next((line for line in lines if token in line.lower()), "")
++            if matched:
++                detail_line = matched
++                break
++        if not detail_line and lines:
++            detail_line = lines[-1]
++    lower_blob = detail_blob.lower()
++    is_sqlite_error = "sqlite" in lower_blob or "no such table" in lower_blob or "database" in lower_blob
++
++    lines = [
++        f"db upgrade failed for database path: {db_path}",
++    ]
++    if detail_line:
++        lines.append(f"Alembic detail: {detail_line}")
++    if is_sqlite_error:
++        lines.append("Detected SQLite migration/preflight issue.")
++    lines.extend(
++        [
++            "Run: python -m hitech_forms.ops.cli db doctor",
++            "Recommended next steps:",
++            "1. python -m hitech_forms.ops.cli db doctor",
++            "2. python -m hitech_forms.ops.cli db backup",
++            "3. HFORMS_ENV=dev python -m hitech_forms.ops.cli db reset --yes-i-know",
++        ]
++    )
++    return "\n".join(lines)
++
++
++def is_reset_allowed(env: dict[str, str] | None = None) -> bool:
++    source = env if env is not None else dict(os.environ)
++    env_name = source.get("HFORMS_ENV", "").strip().lower()
++    allow_override = source.get("HFORMS_ALLOW_DB_RESET", "").strip() == "1"
++    return env_name == "dev" or allow_override
++
++
++def reset_sqlite_db(
++    *,
++    repo_root: Path,
++    db_path: Path,
++    yes_i_know: bool,
++    env: dict[str, str] | None = None,
++) -> ResetResult:
++    source_env = env if env is not None else dict(os.environ)
++    if not yes_i_know:
++        raise RuntimeError("Refusing to reset DB without --yes-i-know.")
++    if not is_reset_allowed(source_env):
++        raise RuntimeError("Reset blocked. Requires HFORMS_ENV=dev or HFORMS_ALLOW_DB_RESET=1.")
++
++    default_db_path = resolve_repo_path(DEFAULT_DB_RELATIVE_PATH, repo_root)
++    allow_override = source_env.get("HFORMS_ALLOW_DB_RESET", "").strip() == "1"
++    if db_path.resolve() != default_db_path and not allow_override:
++        raise RuntimeError(
++            "Reset is restricted to default DB path unless HFORMS_ALLOW_DB_RESET=1 is explicitly set."
++        )
++
++    runs_root = resolve_repo_path(Path("var/db_reset_runs"), repo_root)
++    runs_root.mkdir(parents=True, exist_ok=True)
++    run_dir = (runs_root / _next_reset_run_name(runs_root)).resolve()
++    run_dir.mkdir(parents=True, exist_ok=False)
++    event_log_path = run_dir / "events.jsonl"
++
++    before_report = inspect_sqlite_db(db_path, repo_root=repo_root)
++    _write_canonical_json(run_dir / "doctor_before.json", before_report.to_dict())
++    _append_event(event_log_path, "doctor_before", status=before_report.status)
++
++    removed_existing_db = False
++    if db_path.exists():
++        shutil.copyfile(db_path, run_dir / "db_before_reset.db")
++        db_path.unlink()
++        removed_existing_db = True
++        _append_event(event_log_path, "db_file_deleted", db_path=str(db_path))
++    else:
++        _append_event(event_log_path, "db_file_not_found", db_path=str(db_path))
++
++    db_path.parent.mkdir(parents=True, exist_ok=True)
++    upgrade_to_head(repo_root=repo_root, db_path=db_path)
++    _append_event(event_log_path, "alembic_upgrade_head", db_path=str(db_path))
++
++    after_report = inspect_sqlite_db(db_path, repo_root=repo_root)
++    _write_canonical_json(run_dir / "doctor_after.json", after_report.to_dict())
++    _append_event(event_log_path, "doctor_after", status=after_report.status)
++
++    summary_db_path = str(db_path)
++    summary_default_db_path = str(default_db_path)
++    summary_run_dir = str(run_dir)
++    summary_before_status = before_report.status
++    summary_after_status = after_report.status
++    summary = {
++        "db_path": summary_db_path,
++        "default_db_path": summary_default_db_path,
++        "run_dir": summary_run_dir,
++        "removed_existing_db": removed_existing_db,
++        "before_status": summary_before_status,
++        "after_status": summary_after_status,
++    }
++    _write_canonical_json(run_dir / "summary.json", summary)
++    return ResetResult(
++        db_path=summary_db_path,
++        default_db_path=summary_default_db_path,
++        run_dir=summary_run_dir,
++        removed_existing_db=removed_existing_db,
++        before_status=summary_before_status,
++        after_status=summary_after_status,
++    )
++
++
++def stamp_head_strict(*, repo_root: Path, db_path: Path) -> StampResult:
++    before_report = inspect_sqlite_db(db_path, repo_root=repo_root)
++    if not before_report.db_exists:
++        raise RuntimeError("Cannot stamp head: database file does not exist.")
++    if not before_report.sqlite_readable or before_report.sqlite_corrupted:
++        raise RuntimeError("Cannot stamp head: database is unreadable or corrupted.")
++    if not before_report.schema_matches_head:
++        raise RuntimeError(
++            "Cannot stamp head: schema does not match expected head state. "
++            "Run db doctor and recover via reset/upgrade."
++        )
++
++    if before_report.version_matches_head:
++        return StampResult(
++            db_path=str(db_path),
++            stamped=False,
++            reason="already_at_head",
++            before_status=before_report.status,
++            after_status=before_report.status,
++        )
++
++    run_alembic_command(repo_root=repo_root, db_path=db_path, args=("stamp", "head"))
++    after_report = inspect_sqlite_db(db_path, repo_root=repo_root)
++    if not after_report.version_matches_head:
++        raise RuntimeError("Stamp head completed but alembic_version is still not at head.")
++    return StampResult(
++        db_path=str(db_path),
++        stamped=True,
++        reason="stamped_head",
++        before_status=before_report.status,
++        after_status=after_report.status,
++    )
++
++
++def summarize_report(report: DoctorReport) -> dict[str, Any]:
++    return {
++        "status": report.status,
++        "db_exists": report.db_exists,
++        "sqlite_readable": report.sqlite_readable,
++        "sqlite_corrupted": report.sqlite_corrupted,
++        "partial_schema": report.partial_schema,
++        "schema_matches_head": report.schema_matches_head,
++        "version_matches_head": report.version_matches_head,
++        "missing_tables": list(report.missing_tables),
++        "recommendations": list(report.recommendations),
++    }
+diff --git a/tests/integration/test_db_drift_doctor.py b/tests/integration/test_db_drift_doctor.py
+new file mode 100644
+index 0000000..8f4a173
+--- /dev/null
++++ b/tests/integration/test_db_drift_doctor.py
+@@ -0,0 +1,41 @@
++from __future__ import annotations
++
++import sqlite3
++from pathlib import Path
++
++from typer.testing import CliRunner
++
++from hitech_forms.ops.cli import app
++from hitech_forms.ops.db.doctor import EXPECTED_TABLE_COLUMNS
++from hitech_forms.platform.settings import reset_settings_cache
++
++runner = CliRunner()
++
++
++def _create_partial_schema_missing_submissions(path: Path) -> None:
++    with sqlite3.connect(path) as connection:
++        for table_name in ("forms", "form_versions", "fields", "answers"):
++            cols_sql = ", ".join(f'"{column}" TEXT' for column in EXPECTED_TABLE_COLUMNS[table_name])
++            connection.execute(f'CREATE TABLE "{table_name}" ({cols_sql})')
++        connection.execute('CREATE TABLE "alembic_version" ("version_num" TEXT)')
++        connection.execute("INSERT INTO alembic_version(version_num) VALUES ('0003_webhook_outbox')")
++        connection.commit()
++
++
++def test_doctor_recommends_reset_for_partial_schema_missing_submissions(
++    tmp_path: Path, monkeypatch
++) -> None:
++    db_path = tmp_path / "legacy_partial.db"
++    _create_partial_schema_missing_submissions(db_path)
++
++    monkeypatch.setenv("HFORMS_DB_PATH", str(db_path))
++    monkeypatch.setenv("HFORMS_ADMIN_TOKEN", "test-admin-token")
++    monkeypatch.setenv("HFORMS_TIMEZONE", "UTC")
++    monkeypatch.setenv("PYTHONHASHSEED", "0")
++    reset_settings_cache()
++
++    result = runner.invoke(app, ["db", "doctor"])
++
++    assert result.exit_code == 0
++    assert "partial_schema_detected" in result.output
++    assert "db reset --yes-i-know" in result.output
+diff --git a/tests/unit/test_db_doctor.py b/tests/unit/test_db_doctor.py
+new file mode 100644
+index 0000000..5771699
+--- /dev/null
++++ b/tests/unit/test_db_doctor.py
+@@ -0,0 +1,82 @@
++from __future__ import annotations
++
++import sqlite3
++from pathlib import Path
++
++from hitech_forms.ops.db.doctor import EXPECTED_TABLE_COLUMNS, inspect_sqlite_db
++from hitech_forms.ops.db.paths import find_repo_root
++
++
++def _create_table(path: Path, table_name: str, columns: tuple[str, ...]) -> None:
++    cols_sql = ", ".join(f'"{column}" TEXT' for column in columns)
++    with sqlite3.connect(path) as connection:
++        connection.execute(f'CREATE TABLE "{table_name}" ({cols_sql})')
++        connection.commit()
++
++
++def _create_full_head_schema(path: Path) -> None:
++    with sqlite3.connect(path) as connection:
++        for table_name, columns in EXPECTED_TABLE_COLUMNS.items():
++            cols_sql = ", ".join(f'"{column}" TEXT' for column in columns)
++            connection.execute(f'CREATE TABLE "{table_name}" ({cols_sql})')
++        connection.commit()
++
++
++def test_doctor_reports_missing_db_file(tmp_path: Path) -> None:
++    repo_root = find_repo_root()
++    db_path = tmp_path / "missing.db"
++
++    report = inspect_sqlite_db(db_path, repo_root=repo_root)
++
++    assert report.status == "warn"
++    assert report.db_exists is False
++    assert [issue.code for issue in report.issues] == ["db_file_missing"]
++    assert report.recommendations == ("Run: python -m hitech_forms.ops.cli db upgrade",)
++
++
++def test_doctor_detects_partial_schema_missing_submissions(tmp_path: Path) -> None:
++    repo_root = find_repo_root()
++    db_path = tmp_path / "partial.db"
++    _create_table(db_path, "forms", EXPECTED_TABLE_COLUMNS["forms"])
++    _create_table(db_path, "alembic_version", ("version_num",))
++    with sqlite3.connect(db_path) as connection:
++        connection.execute("INSERT INTO alembic_version(version_num) VALUES ('0003_webhook_outbox')")
++        connection.commit()
++
++    report = inspect_sqlite_db(db_path, repo_root=repo_root)
++
++    assert report.status == "error"
++    assert report.partial_schema is True
++    assert "submissions" in report.missing_tables
++    assert "Run: HFORMS_ENV=dev python -m hitech_forms.ops.cli db reset --yes-i-know" in report.recommendations
++    assert "partial_schema_detected" in [issue.code for issue in report.issues]
++
++
++def test_doctor_detects_corrupted_sqlite_file(tmp_path: Path) -> None:
++    repo_root = find_repo_root()
++    db_path = tmp_path / "corrupt.db"
++    db_path.write_text("this is not sqlite", encoding="utf-8")
++
++    report = inspect_sqlite_db(db_path, repo_root=repo_root)
++
++    assert report.status == "error"
++    assert report.db_exists is True
++    assert report.sqlite_corrupted is True
++    assert [issue.code for issue in report.issues] == ["db_corrupted"]
++
++
++def test_doctor_identifies_stamp_head_candidate_when_schema_matches_head(tmp_path: Path) -> None:
++    repo_root = find_repo_root()
++    db_path = tmp_path / "head_schema_without_version.db"
++    _create_full_head_schema(db_path)
++
++    report = inspect_sqlite_db(db_path, repo_root=repo_root)
++
++    assert report.status == "warn"
++    assert report.schema_matches_head is True
++    assert report.version_matches_head is False
++    assert [issue.code for issue in report.issues] == [
++        "missing_alembic_version_table",
++        "schema_matches_head_but_alembic_version_differs",
++    ]
++    assert report.recommendations == ("Run: python -m hitech_forms.ops.cli db stamp-head",)
+diff --git a/tests/unit/test_db_recovery.py b/tests/unit/test_db_recovery.py
+new file mode 100644
+index 0000000..0a23389
+--- /dev/null
++++ b/tests/unit/test_db_recovery.py
+@@ -0,0 +1,30 @@
++from __future__ import annotations
++
++import sqlite3
++from pathlib import Path
++
++from hitech_forms.ops.db.recovery import create_backup, is_reset_allowed
++
++
++def _create_sqlite_db(path: Path) -> None:
++    with sqlite3.connect(path) as connection:
++        connection.execute("CREATE TABLE sample (id INTEGER PRIMARY KEY)")
++        connection.commit()
++
++
++def test_create_backup_uses_monotonic_sequence_names(tmp_path: Path) -> None:
++    db_path = tmp_path / "source.db"
++    backup_dir = tmp_path / "backups"
++    _create_sqlite_db(db_path)
++
++    first = create_backup(db_path=db_path, backup_dir=backup_dir)
++    second = create_backup(db_path=db_path, backup_dir=backup_dir)
++
++    assert Path(first.backup_path).name == "backup_001.db"
++    assert Path(second.backup_path).name == "backup_002.db"
++
++
++def test_is_reset_allowed_dev_or_override_only() -> None:
++    assert is_reset_allowed({"HFORMS_ENV": "dev"}) is True
++    assert is_reset_allowed({"HFORMS_ALLOW_DB_RESET": "1"}) is True
++    assert is_reset_allowed({"HFORMS_ENV": "prod", "HFORMS_ALLOW_DB_RESET": "0"}) is False
+diff --git a/tests/unit/test_db_upgrade_error_message.py b/tests/unit/test_db_upgrade_error_message.py
+new file mode 100644
+index 0000000..7b817ba
+--- /dev/null
++++ b/tests/unit/test_db_upgrade_error_message.py
+@@ -0,0 +1,40 @@
++from __future__ import annotations
++
++from pathlib import Path
++
++from typer.testing import CliRunner
++
++from hitech_forms.ops.cli import app
++from hitech_forms.ops.db.alembic import AlembicCommandError
++from hitech_forms.platform.settings import reset_settings_cache
++
++runner = CliRunner()
++
++
++def test_db_upgrade_reports_helpful_doctor_message_on_sqlite_failure(
++    tmp_path: Path, monkeypatch
++) -> None:
++    db_path = tmp_path / "legacy.db"
++
++    def _raise_alembic_error(*, repo_root, db_path):  # type: ignore[no-untyped-def]
++        _ = (repo_root, db_path)
++        raise AlembicCommandError(
++            command=["python", "-m", "alembic", "upgrade", "head"],
++            return_code=1,
++            stdout="",
++            stderr="sqlite3.OperationalError: no such table: submissions",
++        )
++
++    monkeypatch.setattr("hitech_forms.ops.cli.upgrade_to_head", _raise_alembic_error)
++    monkeypatch.setenv("HFORMS_DB_PATH", str(db_path))
++    monkeypatch.setenv("HFORMS_ADMIN_TOKEN", "test-admin-token")
++    monkeypatch.setenv("HFORMS_TIMEZONE", "UTC")
++    monkeypatch.setenv("PYTHONHASHSEED", "0")
++    reset_settings_cache()
++
++    result = runner.invoke(app, ["db", "upgrade"])
++
++    assert result.exit_code == 1
++    assert "db upgrade failed for database path" in result.output
++    assert "Run: python -m hitech_forms.ops.cli db doctor" in result.output
++    assert "Traceback" not in result.output
+diff --git a/tools/codex/BUNDLES/BLOCK_DB_DRIFT/STATUS.json b/tools/codex/BUNDLES/BLOCK_DB_DRIFT/STATUS.json
+new file mode 100644
+index 0000000..c43b072
+--- /dev/null
++++ b/tools/codex/BUNDLES/BLOCK_DB_DRIFT/STATUS.json
+@@ -0,0 +1,14 @@
++{
++  "block": "BLOCK_DB_DRIFT",
++  "state": "completed",
++  "repo_root": "F:\\repos\\HITECH_FORMS",
++  "validations": {
++    "db_doctor_default": "passed_with_drift_diagnosis",
++    "db_upgrade_default": "failed_with_helpful_error_message",
++    "quality_check": "passed",
++    "pytest": "passed",
++    "pytest_e2e_smoke": "passed"
++  },
++  "created_count": 15,
++  "modified_count": 1
++}
+diff --git a/tools/codex/BUNDLES/BLOCK_DB_DRIFT/FILES_CHANGED.json b/tools/codex/BUNDLES/BLOCK_DB_DRIFT/FILES_CHANGED.json
+new file mode 100644
+index 0000000..5d73a61
+--- /dev/null
++++ b/tools/codex/BUNDLES/BLOCK_DB_DRIFT/FILES_CHANGED.json
+@@ -0,0 +1,23 @@
++{
++  "block": "BLOCK_DB_DRIFT",
++  "created": [
++    "docs/dev/DB_DRIFT_BLOCK_PLAN.md",
++    "docs/dev/DB_DRIFT_PLAYBOOK.md",
++    "docs/dev/FINAL_REPORT_BLOCK_DB_DRIFT.md",
++    "src/hitech_forms/ops/db/__init__.py",
++    "src/hitech_forms/ops/db/alembic.py",
++    "src/hitech_forms/ops/db/doctor.py",
++    "src/hitech_forms/ops/db/paths.py",
++    "src/hitech_forms/ops/db/recovery.py",
++    "tests/integration/test_db_drift_doctor.py",
++    "tests/unit/test_db_doctor.py",
++    "tests/unit/test_db_recovery.py",
++    "tests/unit/test_db_upgrade_error_message.py",
++    "tools/codex/BUNDLES/BLOCK_DB_DRIFT/STATUS.json",
++    "tools/codex/BUNDLES/BLOCK_DB_DRIFT/FILES_CHANGED.json",
++    "tools/codex/BUNDLES/BLOCK_DB_DRIFT/DIFF.patch"
++  ],
++  "modified": [
++    "src/hitech_forms/ops/cli.py"
++  ]
++}

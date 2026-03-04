@@ -41,7 +41,7 @@ async def test_submission_seq_is_unique_and_monotonic_per_form_under_concurrency
     assert listed.status_code == 200
     list_payload = listed.json()
     assert [item["submission_seq"] for item in list_payload["items"]] == list(
-        range(1, submit_count + 1)
+        range(submit_count, 0, -1)
     )
 
 

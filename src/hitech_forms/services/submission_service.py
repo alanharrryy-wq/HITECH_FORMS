@@ -16,15 +16,25 @@ from hitech_forms.contracts import (
 from hitech_forms.db.models import Field
 from hitech_forms.platform.determinism import utc_now_epoch
 from hitech_forms.platform.errors import bad_request
+from hitech_forms.platform.logging import get_logger, log_event
+from hitech_forms.platform.metrics import increment_counter
 from hitech_forms.platform.slug import slugify
+from hitech_forms.services.webhooks import WebhookOutboxService
 
 _EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 
 
 class SubmissionService:
-    def __init__(self, form_repo: FormRepositoryPort, submission_repo: SubmissionRepositoryPort):
+    def __init__(
+        self,
+        form_repo: FormRepositoryPort,
+        submission_repo: SubmissionRepositoryPort,
+        webhook_outbox_service: WebhookOutboxService | None = None,
+    ):
         self._form_repo = form_repo
         self._submission_repo = submission_repo
+        self._webhook_outbox_service = webhook_outbox_service
+        self._logger = get_logger("hitech_forms.submissions")
 
     def command_submit_public(self, *, slug: str, values: dict[str, str]) -> dict:
         form = self._form_repo.get_form_by_slug(slugify(slug))
@@ -44,6 +54,25 @@ class SubmissionService:
             answers=normalized_answers,
             now_epoch=utc_now_epoch(),
         )
+        increment_counter("submissions_total", 1)
+        log_event(
+            self._logger,
+            "submission_accepted",
+            form_id=form.id,
+            form_version_id=version.id,
+            submission_id=submission.id,
+            submission_seq=submission.submission_seq,
+        )
+        if self._webhook_outbox_service is not None:
+            self._webhook_outbox_service.enqueue_submission(
+                form_id=form.id,
+                form_version_id=version.id,
+                submission_id=submission.id,
+                submission_seq=submission.submission_seq,
+                created_at=submission.created_at,
+                slug=form.slug,
+                answers=normalized_answers,
+            )
         return asdict(
             SubmissionSummaryDTO(
                 id=submission.id,

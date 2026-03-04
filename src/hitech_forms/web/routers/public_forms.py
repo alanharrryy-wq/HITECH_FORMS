@@ -3,7 +3,11 @@ from __future__ import annotations
 from fastapi import APIRouter, Depends, Request
 from fastapi.responses import HTMLResponse
 
-from hitech_forms.app.dependencies import get_form_service, get_submission_service
+from hitech_forms.app.dependencies import (
+    enforce_public_submission_rate_limit,
+    get_form_service,
+    get_submission_service,
+)
 from hitech_forms.contracts import FormServicePort, SubmissionServicePort
 from hitech_forms.web.routers.common import redirect, templates
 
@@ -27,6 +31,7 @@ def build_public_forms_web_router() -> APIRouter:
         form_service: FormServicePort = Depends(get_form_service),
         submission_service: SubmissionServicePort = Depends(get_submission_service),
     ):
+        enforce_public_submission_rate_limit(request)
         raw_form = await request.form()
         values = {str(key): str(value) for key, value in raw_form.multi_items()}
         try:

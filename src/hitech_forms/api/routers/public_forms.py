@@ -2,10 +2,14 @@ from __future__ import annotations
 
 from typing import Any
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Request
 from pydantic import BaseModel
 
-from hitech_forms.app.dependencies import get_form_service, get_submission_service
+from hitech_forms.app.dependencies import (
+    enforce_public_submission_rate_limit,
+    get_form_service,
+    get_submission_service,
+)
 from hitech_forms.app.responses import canonical_json_response
 from hitech_forms.contracts import FormServicePort, SubmissionServicePort
 
@@ -25,8 +29,10 @@ def build_public_forms_router() -> APIRouter:
     def public_submit_form(
         slug: str,
         payload: SubmitFormRequest,
+        request: Request,
         submission_service: SubmissionServicePort = Depends(get_submission_service),
     ):
+        enforce_public_submission_rate_limit(request)
         created: dict[str, Any] = submission_service.command_submit_public(slug=slug, values=payload.values)
         return canonical_json_response(created, status_code=201)
 

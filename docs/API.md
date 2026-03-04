@@ -5,6 +5,11 @@ All admin endpoints require `X-Admin-Token` (or `?token=` for SSR navigation).
 ## Health
 
 - `GET /api/health`
+- `GET /api/health/db`
+
+## Metrics
+
+- `GET /api/metrics` (feature-flagged by `HFORMS_FEATURE_METRICS`)
 
 ## Admin Forms
 

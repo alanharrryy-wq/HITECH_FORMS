@@ -37,15 +37,30 @@ def runtime_env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> dict[str, st
     monkeypatch.setenv("HFORMS_ADMIN_TOKEN", "test-admin-token")
     monkeypatch.setenv("HFORMS_TIMEZONE", "UTC")
     monkeypatch.setenv("HFORMS_RATE_LIMIT_PER_MINUTE", "999999")
+    monkeypatch.setenv("HFORMS_FEATURE_WEBHOOKS_OUTBOX", "false")
+    monkeypatch.setenv("HFORMS_FEATURE_RATE_LIMIT", "false")
+    monkeypatch.setenv("HFORMS_FEATURE_METRICS", "false")
+    monkeypatch.setenv("HFORMS_WEBHOOK_TARGET_URL", "")
+    monkeypatch.setenv("HFORMS_WEBHOOK_MAX_ATTEMPTS", "8")
+    monkeypatch.setenv("HFORMS_WEBHOOK_BASE_BACKOFF_SECONDS", "5")
+    monkeypatch.setenv("HFORMS_WEBHOOK_JITTER", "0")
+    monkeypatch.setenv("HFORMS_RATE_LIMIT_RPS_PUBLIC", "0")
+    monkeypatch.setenv("HFORMS_RATE_LIMIT_RPS_ADMIN", "0")
     monkeypatch.setenv("PYTHONHASHSEED", "0")
     monkeypatch.setenv("HFORMS_FIXED_NOW", "1700000000")
     _run_alembic_upgrade(db_path)
 
+    from hitech_forms.app.dependencies import reset_rate_limiter_cache
     from hitech_forms.db.engine import reset_engine_cache
+    from hitech_forms.platform.feature_flags import reset_feature_flags_cache
+    from hitech_forms.platform.metrics import reset_metrics
     from hitech_forms.platform.settings import reset_settings_cache
 
     reset_settings_cache()
+    reset_feature_flags_cache()
     reset_engine_cache()
+    reset_metrics()
+    reset_rate_limiter_cache()
     return {"db_path": str(db_path), "admin_token": "test-admin-token"}
 
 

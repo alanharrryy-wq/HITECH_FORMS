@@ -44,6 +44,8 @@ def test_migration_replay_and_reflection(runtime_env):
         "fields",
         "submissions",
         "answers",
+        "webhook_outbox",
+        "webhook_delivery_log",
     }
 
     forms_indexes = {index["name"] for index in inspector.get_indexes("forms")}

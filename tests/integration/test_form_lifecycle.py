@@ -98,8 +98,8 @@ async def test_export_csv_headers_and_order(client, runtime_env):
     assert export.status_code == 200
     lines = export.text.strip().splitlines()
     assert lines[0] == "submission_id,created_at,name,email,priority,notify"
-    assert lines[1] == "1,1700000000,Alice,alice@example.com,low,true"
-    assert lines[2] == "2,1700000000,Bob,bob@example.com,high,true"
+    assert lines[1] == "2,1700000000,Bob,bob@example.com,high,true"
+    assert lines[2] == "1,1700000000,Alice,alice@example.com,low,true"
 
 
 @pytest.mark.anyio

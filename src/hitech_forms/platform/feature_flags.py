@@ -1,17 +1,16 @@
 from __future__ import annotations
 
-import os
 from dataclasses import dataclass
 
-
-def _env_bool(name: str, default: bool = False) -> bool:
-    v = os.getenv(name, str(default)).strip().lower()
-    return v in ("1", "true", "yes", "on")
+from hitech_forms.platform.settings import get_settings
 
 
 @dataclass(frozen=True)
 class FeatureFlags:
-    demo: bool = _env_bool("HFORMS_FLAG_DEMO", False)
+    demo: bool
+    webhooks_outbox: bool
+    rate_limit: bool
+    metrics: bool
 
 
 _FLAGS: FeatureFlags | None = None
@@ -20,5 +19,16 @@ _FLAGS: FeatureFlags | None = None
 def get_feature_flags() -> FeatureFlags:
     global _FLAGS
     if _FLAGS is None:
-        _FLAGS = FeatureFlags()
+        settings = get_settings()
+        _FLAGS = FeatureFlags(
+            demo=settings.feature_demo,
+            webhooks_outbox=settings.feature_webhooks_outbox,
+            rate_limit=settings.feature_rate_limit,
+            metrics=settings.feature_metrics,
+        )
     return _FLAGS
+
+
+def reset_feature_flags_cache() -> None:
+    global _FLAGS
+    _FLAGS = None

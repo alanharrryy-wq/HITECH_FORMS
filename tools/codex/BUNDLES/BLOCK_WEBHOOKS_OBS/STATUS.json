@@ -1,0 +1,15 @@
+{
+  "block": "BLOCK_WEBHOOKS_OBS",
+  "state": "completed",
+  "repo_root": "F:\\repos\\HITECH_FORMS",
+  "validations": {
+    "db_upgrade_default": "failed_on_existing_default_db",
+    "db_upgrade_fresh": "passed",
+    "quality_check": "passed",
+    "pytest": "passed",
+    "pytest_e2e_smoke": "passed",
+    "ops_ci_wave": "passed"
+  },
+  "created_count": 25,
+  "modified_count": 28
+}

@@ -5,11 +5,13 @@ from fastapi.exceptions import RequestValidationError
 
 from hitech_forms.api.router import api_router
 from hitech_forms.app.lifespan import lifespan
+from hitech_forms.app.middleware import request_context_middleware
 from hitech_forms.app.responses import canonical_json_response
 from hitech_forms.platform.errors import AppError
 from hitech_forms.web.router import web_router
 
 app = FastAPI(title="HITECH_FORMS", lifespan=lifespan)
+app.middleware("http")(request_context_middleware)
 app.include_router(api_router)
 app.include_router(web_router)
 
